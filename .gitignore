@@ -1,0 +1,76 @@
+# ==============================================================================
+# Python Basics
+# ==============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environments
+venv/
+.venv/
+ENV/
+
+# ==============================================================================
+# Bioinformatics & Pipeline Specifics
+# ==============================================================================
+# FlashFry Database and Build folders
+htky_db/
+build/
+
+# Large Genomic Data Files (Avoid committing these to Git)
+*.fasta
+*.fasta.fai
+*.gff
+*.gff3
+*.bed
+*.csv
+*.tsv
+
+# Pipeline Intermediate and Output Files
+targets.bed
+targets.fasta
+targets.output
+targets.output.scored
+final_sgrnas.tsv
+
+# ==============================================================================
+# Java / FlashFry
+# ==============================================================================
+# Usually, you don't commit large .jar files to git. 
+# If you must, remove this line.
+*.jar
+
+# ==============================================================================
+# IDEs and OS
+# ==============================================================================
+# VS Code
+.vscode/
+
+# PyCharm / IntelliJ
+.idea/
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+
+.aider*
