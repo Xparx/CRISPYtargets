@@ -5,6 +5,8 @@
 
 The pipeline integrates **FlashFry** (a high-performance CRISPR target discovery tool) with custom Python logic to handle gene hierarchy resolution, promoter region definition, accessibility scoring, and SNP-based entropy calculation.
 
+It is inspired by and aims to, in part, replicate the output of the [CRISPRtargets](https://github.com/ChristiaenLab/CRISPRtargets) package but in python.
+
 ---
 
 ## How the Code Works
