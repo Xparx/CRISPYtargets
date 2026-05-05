@@ -2,3 +2,4 @@ pyranges
 pandas
 biopython
 pyfaidx
+PyYAML

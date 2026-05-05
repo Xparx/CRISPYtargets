@@ -18,17 +18,15 @@ def complement_iupac(char):
     """Returns the complement of an IUPAC ambiguity code."""
     return IUPAC_COMPLEMENT.get(char.upper(), char)
 
+ENTROPY_WEIGHTS = {
+    'M': 1.0, 'R': 1.0, 'W': 1.0, 'S': 1.0, 'Y': 1.0, 'K': 1.0,
+    'V': -1/3, 'H': -1/3, 'D': -1/3, 'B': -1/3,
+    'N': 2.0
+}
+
 def calculate_entropy(sequence):
-    """Calculates sequence entropy based on IUPAC ambiguity codes."""
-    entropy = 0.0
-    for char in sequence:
-        if char in ['M', 'R', 'W', 'S', 'Y', 'K']:
-            entropy += 1.0
-        elif char in ['V', 'H', 'D', 'B']:
-            entropy += -1.0 * (1/3) # Simplified approximation of R logic
-        elif char == 'N':
-            entropy += 2.0
-    return entropy
+    """Calculates sequence entropy using a fast lookup table."""
+    return sum(ENTROPY_WEIGHTS.get(char, 0.0) for char in sequence)
 
 def design_oligos(target_seq, strand, target_len=20, pam_len=3):
     """
@@ -86,11 +84,10 @@ def convert_output_to_igv_bed(input_file):
 
     # BED format requires: Chromosome, Start, End, Name, Score, Strand
     # We will use 'gene_id' as the name and 'Doench2014OnTarget' as the score
-    # bed_df = df[df['over_cutoff']][['Chromosome', 'Start', 'End', 'feature', 'Doench2014OnTarget', 'Strand']]
-    df['start'] = df['Start'] + df['start']
-    df['stop'] = df['Start'] + df['stop']
+    df['abs_start'] = df['Start'] + df['start']
+    df['abs_end'] = df['Start'] + df['stop']
 
-    bed_df = df[df['over_cutoff']][['Chromosome', 'start', 'stop', 'feature', 'Doench2014OnTarget', 'Strand']]
+    bed_df = df[df['over_cutoff']][['Chromosome', 'abs_start', 'abs_end', 'feature', 'Doench2014OnTarget', 'Strand']]
     bed_df.columns = ['chrom', 'start', 'end', 'name', 'score', 'strand']
     bed_df = bed_df.drop_duplicates() # (subset=['chrom', 'start', 'end', 'name'])
 

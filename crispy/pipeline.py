@@ -1,8 +1,11 @@
 import argparse
 import subprocess
 import os
+import numpy as np
 import pandas as pd
 import pyranges as pr
+import logging
+import yaml
 from pyfaidx import Fasta
 from utils import calculate_entropy, design_oligos, parse_flashfry_contig
 from utils import complement_iupac
@@ -21,36 +24,43 @@ class CrispyPipeline:
         self.db = "htky_db"
 
     def prepare_targets(self):
-        print("Preparing target regions...")
+        logging.info("Preparing target regions...")
         # Load GFF
         gr = pr.read_gff3(self.args.gff)
+        required_gff = {'ID', 'Parent', 'Feature'}
+        missing = required_gff - set(gr.df.columns)
+        if missing:
+            raise ValueError(f"Malformed GFF3 in {self.args.gff}. Missing required columns: {missing}")
 
         # 1. Get Exons
         exons = gr[(gr.df.Feature == 'exon') | (gr.df.Feature == 'CDS')]
         exons_df = exons.df.drop_duplicates(subset=['Chromosome', 'Start', 'End', 'Strand'])
         exons = pr.PyRanges(exons_df)
 
-        # 2. Get Promoters (TSS - 1107 to TSS + 107)
-        # Note: In GFF3, the top-level feature is often 'mRNA', 'transcript', or 'noncoding_transcript'
-        tpts = gr[gr.df.Feature.isin(['transcript', 'mRNA', 'noncoding_transcript'])]
+        # 2. Get Promoters
+        tss_features = self.args.tss_features.split(',')
+        upstream = self.args.promoter_upstream
+        downstream = self.args.promoter_downstream
+        logging.info(f"Identifying promoters using features: {tss_features} (Window: -{upstream} to +{downstream})")
+        tpts = gr[gr.df.Feature.isin(tss_features)]
         # tpts = gr[gr.feature == 'transcript']
 
-        # Positive strand: TSS is start. Range: [start - 1107, start + 107]
+        # Positive strand: TSS is start.
         pos_tpts = tpts[tpts.df['Strand'] == '+']
         pos_df = pos_tpts.df.copy()
         pos_df['Feature'] = 'promoter' # Explicitly label as promoter
         tss_pos = pos_df['Start']
-        pos_df['Start'] = tss_pos - 1107
-        pos_df['End'] = tss_pos + 107
+        pos_df['Start'] = tss_pos - upstream
+        pos_df['End'] = tss_pos + downstream
         pos_promoters = pr.PyRanges(pos_df)
 
-        # Negative strand: TSS is end. Range: [end - 107, end + 1107]
+        # Negative strand: TSS is end.
         neg_tpts = tpts[tpts.df['Strand'] == '-']
         neg_df = neg_tpts.df.copy()
         neg_df['Feature'] = 'promoter' # Explicitly label as promoter
         tss_neg = neg_df['End']
-        neg_df['Start'] = tss_neg - 107
-        neg_df['End'] = tss_neg + 1107
+        neg_df['Start'] = tss_neg - downstream
+        neg_df['End'] = tss_neg + upstream
         neg_promoters = pr.PyRanges(neg_df)
 
         # Combine positive and negative promoters by concatenating their DataFrames
@@ -63,7 +73,7 @@ class CrispyPipeline:
 
         # Optional: Filter by provided gene list
         if self.args.genes:
-            print(f"Filtering by gene list: {self.args.genes}")
+            logging.info(f"Filtering by gene list: {self.args.genes}")
             # Load seed IDs from CSV
             seed_ids = set(pd.read_csv(self.args.genes)['Gene.ID'].astype(str).tolist())
 
@@ -93,23 +103,22 @@ class CrispyPipeline:
                 if len(expanded_ids) == prev_count:
                     break
 
-            print(f"Expanded {len(seed_ids)} seed IDs to {len(expanded_ids)} total related features.")
+            logging.info(f"Expanded {len(seed_ids)} seed IDs to {len(expanded_ids)} total related features.")
 
             # 3. Filter targets: Keep if ID or Parent is in the expanded set
-            def is_related(row):
-                # Convert to string to ensure exact match against the set
-                row_id = str(getattr(row, 'ID', ''))
-                row_parent = str(getattr(row, 'Parent', ''))
-                return (row_id in expanded_ids) or (row_parent in expanded_ids)
-
-            targets = targets[targets.df.apply(is_related, axis=1)]
+            # Use vectorized .isin() for performance
+            id_col = targets.df['ID'].astype(str) if 'ID' in targets.df.columns else pd.Series([''] * len(targets.df))
+            parent_col = targets.df['Parent'].astype(str) if 'Parent' in targets.df.columns else pd.Series([''] * len(targets.df))
+            
+            combined_mask = id_col.isin(expanded_ids) | parent_col.isin(expanded_ids)
+            targets = targets[combined_mask]
 
         else:
-            print("No gene list provided. Processing all genes in GFF...")
+            logging.info("No gene list provided. Processing all genes in GFF...")
 
         # Optional Filter BED
         if self.args.filter_bed and os.path.exists(self.args.filter_bed):
-            print(f"Applying optional filter: {self.args.filter_bed}")
+            logging.info(f"Applying optional filter: {self.args.filter_bed}")
             filter_gr = pr.read_bed(self.args.filter_bed)
             targets = targets.intersect(filter_gr)
 
@@ -120,17 +129,26 @@ class CrispyPipeline:
         
         # Create quick lookup maps for parents and feature types
         # We use astype(str) to avoid issues with NaN/float types
-        parent_lookup = dict(zip(gff_df['ID'].astype(str), gff_df['Parent'].astype(str)))
+        parent_lookup = {}
+        for fid, parent in zip(gff_df['ID'].astype(str), gff_df['Parent'].astype(str)):
+            if parent != 'nan':
+                parent_lookup[fid] = parent.split(',')
         feature_lookup = dict(zip(gff_df['ID'].astype(str), gff_df['Feature'].astype(str)))
 
         def resolve_to_gene(fid):
-            """Recursively find the top-level gene ID for a given feature ID."""
-            curr = fid
-            visited = set() # Prevent infinite loops in malformed GFFs
-            while curr in parent_lookup and feature_lookup.get(curr) != 'gene' and curr not in visited:
-                visited.add(curr)
-                curr = parent_lookup[curr]
-            return curr
+            """Finds the closest ancestor labeled as 'gene' using BFS."""
+            queue = [fid]
+            visited = {fid}
+            while queue:
+                current = queue.pop(0)
+                if feature_lookup.get(current) == 'gene':
+                    return current
+                parents = parent_lookup.get(current, [])
+                for p in parents:
+                    if p not in visited:
+                        visited.add(p)
+                        queue.append(p)
+            return fid
 
         # Map every ID in the GFF to its root gene
         for fid in gff_df['ID'].dropna().astype(str):
@@ -141,7 +159,7 @@ class CrispyPipeline:
         return targets
 
     def extract_sequences(self, targets_gr):
-        print("Extracting sequences for FlashFry...")
+        logging.info("Extracting sequences for FlashFry...")
         fasta_out = "targets.fasta"
         genome = Fasta(self.args.ref)
 
@@ -162,7 +180,7 @@ class CrispyPipeline:
         return fasta_out
 
     def run_flashfry(self, targets_gr):
-        print("Running FlashFry...")
+        logging.info("Running FlashFry...")
         # Index if DB doesn't exist
         if not os.path.exists(self.db):
             # Create a temporary directory for FlashFry indexing
@@ -182,8 +200,10 @@ class CrispyPipeline:
         return "targets.output.scored"
 
     def post_process(self, scored_file):
-        print("Post-processing and scoring...")
+        logging.info("Post-processing and scoring...")
         df = pd.read_csv(scored_file, sep='\t')
+        if 'contig' not in df.columns:
+            raise ValueError(f"FlashFry output {scored_file} is missing the 'contig' column. Ensure the --positionOutput flag was used during discovery.")
 
         # Parse coordinates for all targets (needed for sorting and accessibility)
         parsed_coords = df['contig'].apply(parse_flashfry_contig)
@@ -194,8 +214,10 @@ class CrispyPipeline:
         # 1. Accessibility (Optional)
         df['accessibility'] = 0
         if self.args.accessome and os.path.exists(self.args.accessome):
-            print(f"Calculating accessibility using {self.args.accessome}...")
+            logging.info(f"Calculating accessibility using {self.args.accessome}...")
             acc_gr = pr.read_bed(self.args.accessome)
+            if acc_gr.df.shape[1] < 3:
+                raise ValueError(f"Accessome BED {self.args.accessome} is malformed. Expected at least 3 columns (Chrom, Start, End).")
 
             # Preserve original index to map back to df
             target_gr_indexed = target_gr.assign(orig_idx=target_gr.df.index)
@@ -210,13 +232,15 @@ class CrispyPipeline:
             del joined # Explicitly remove the large joined dataframe
             gc.collect() # Force memory release
         else:
-            print("No accessome file provided. Skipping accessibility scoring.")
+            logging.info("No accessome file provided. Skipping accessibility scoring.")
 
         # 2. SNP Entropy
         df['entropy'] = 0.0
         if self.args.snps and os.path.exists(self.args.snps):
-            print(f"Calculating SNP entropy using {self.args.snps}...")
+            logging.info(f"Calculating SNP entropy using {self.args.snps}...")
             snp_gr = pr.read_bed(self.args.snps)
+            if snp_gr.df.shape[1] < 3:
+                raise ValueError(f"SNP BED {self.args.snps} is malformed. Expected at least 3 columns (Chrom, Start, End).")
 
             # Add original index and coordinates to target_gr to track back to df
             target_gr_indexed = target_gr.assign(
@@ -227,38 +251,37 @@ class CrispyPipeline:
 
             # Join targets with SNPs to get all overlapping pairs
             joined = target_gr_indexed.join(snp_gr)
+            j_df = joined.df
 
-            # Dictionary to store mutated sequences: {index: sequence_list}
-            mutated_seqs = {}
+            # 1. VECTORIZED: Calculate relative positions for all overlaps at once
+            j_df['rel_pos'] = np.where(
+                j_df['Strand'] == '+',
+                j_df['Start_2'] - j_df['t_start'],
+                j_df['t_end'] - j_df['Start_2'] - 1
+            )
 
-            for row in joined.df.itertuples():
-                idx = row.orig_idx
-                # Initialize with original sequence if not already mutated
-                if idx not in mutated_seqs:
-                    mutated_seqs[idx] = list(df.at[idx, 'sequence'])
+            # 2. VECTORIZED: Handle IUPAC complements for minus strand
+            j_df['snp_code'] = j_df['Name']
+            minus_mask = j_df['Strand'] == '-'
+            j_df.loc[minus_mask, 'snp_code'] = j_df.loc[minus_mask, 'Name'].apply(complement_iupac)
 
-                # Calculate relative position in the FlashFry sequence
-                # row.Start_2 is the SNP start, row.t_start/t_end are target boundaries
-                snp_start = row.Start_2
-                t_start = row.t_start
-                t_end = row.t_end
-                strand = row.Strand
+            # 3. GROUPED MUTATION: Only loop over targets that have at least one SNP
+            grouped = j_df.groupby('orig_idx')
+            entropy_results = {}
 
-                if strand == '+':
-                    rel_pos = snp_start - t_start
-                else:
-                    # For minus strand, the sequence is RC, so position is mirrored
-                    rel_pos = t_end - snp_start - 1
+            for idx, group in grouped:
+                # Get original sequence
+                seq_list = list(df.at[idx, 'sequence'])
+                seq_len = len(seq_list)
+                
+                for row in group.itertuples():
+                    if 0 <= row.rel_pos < seq_len:
+                        seq_list[row.rel_pos] = row.snp_code
+                
+                entropy_results[idx] = calculate_entropy(seq_list)
 
-                if 0 <= rel_pos < len(mutated_seqs[idx]):
-                    snp_code = str(row.Name)
-                    if strand == '-':
-                        snp_code = complement_iupac(snp_code)
-                    mutated_seqs[idx][rel_pos] = snp_code
-
-            # Calculate entropy on the mutated sequences
-            for idx, seq_list in mutated_seqs.items():
-                df.at[idx, 'entropy'] = calculate_entropy("".join(seq_list))
+            # Map results back to the main dataframe
+            df['entropy'] = df.index.map(entropy_results).fillna(0.0)
 
         # 3. Oligo Design
         # Dynamically find the sequence column (it's the one containing the 23bp target+PAM)
@@ -274,7 +297,7 @@ class CrispyPipeline:
         if seq_col is None:
             raise KeyError(f"Could not find a sequence column with length {expected_len} in the FlashFry output. Columns found: {list(df.columns)}")
 
-        print(f"Using column '{seq_col}' as the target sequence source.")
+        logging.info(f"Using column '{seq_col}' as the target sequence source.")
 
         oligos = df.apply(
             lambda row: design_oligos(
@@ -286,6 +309,13 @@ class CrispyPipeline:
             axis=1
         )
         df[['fwd', 'rev']] = pd.DataFrame(oligos.tolist(), index=df.index)
+
+        # 3.5 Deduplication
+        # A guide is redundant if it targets the same gene with the same sequence.
+        # We keep the first occurrence (which, after sorting, would be the best).
+        logging.info(f"Deduplicating targets... Original count: {len(df)}")
+        df = df.drop_duplicates(subset=['gene_id', 'target', 'context'])
+        logging.info(f"Deduplication complete. Unique guides: {len(df)}")
 
         # 4. Final Ranking
         df['over_cutoff'] = df['Doench2014OnTarget'] > self.args.cutoff
@@ -314,30 +344,66 @@ class CrispyPipeline:
         final = df
 
         final.to_csv("final_sgrnas.tsv", sep='\t', index=False)
-        print("Done. Results saved to final_sgrnas.tsv")
+        logging.info("Done. Results saved to final_sgrnas.tsv")
 
+
+def setup_logging(log_name="crispy.log"):
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+    
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
+    
+    file_handler = logging.FileHandler(log_name)
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+    
+    logger.addHandler(console_handler)
+    logger.addHandler(file_handler)
+
+def load_config(config_path):
+    try:
+        with open(config_path, 'r') as f:
+            return yaml.safe_load(f) or {}
+    except Exception as e:
+        # We use print here because logging isn't set up yet
+        print(f"ERROR: Failed to load config file {config_path}: {e}")
+        return {}
 
 if __name__ == "__main__":
+    # Pre-parse to check for config file
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--config", type=str, help="Path to YAML config file")
+    pre_args, remaining_args = pre_parser.parse_known_args()
+
+    config = load_config(pre_args.config) if pre_args.config else {}
+
     parser = argparse.ArgumentParser(description="Crispy CRISPR Target Pipeline")
+    parser.add_argument("--config", type=str, help="Path to YAML config file")
     parser.add_argument("--genes", required=False, help="CSV of target genes names (optional)")
-    parser.add_argument("--gff", required=True, help="Reference GFF file")
-    parser.add_argument("--ref", required=True, help="Reference genome FASTA")
-    parser.add_argument("--accessome", required=False, help="accessome.bed file (optional)")
-    parser.add_argument("--snps", help="Optional SNP bed file")
-    parser.add_argument("--filter-bed", help="Optional region filter bed file")
-    parser.add_argument("--cutoff", type=float, default=0.65, help="Doench score cutoff")
-    parser.add_argument("--target-len", type=int, default=20, help="Expected target sequence length (default 20)")
-    parser.add_argument("--pam-len", type=int, default=3, help="Expected PAM length (default 3)")
-    parser.add_argument("--mem", type=str, default="8g", help="Memory limit for FlashFry (e.g., 4g, 8g, 16g)")
-    parser.add_argument("--metrics", type=str, default="doench2014ontarget", help="FlashFry scoring metrics, comma-separated (default: doench2014ontarget)")
+    parser.add_argument("--gff", default=config.get('gff'), required=not config.get('gff'), help="Reference GFF file")
+    parser.add_argument("--ref", default=config.get('ref'), required=not config.get('ref'), help="Reference genome FASTA")
+    parser.add_argument("--accessome", required=False, default=config.get('accessome'), help="accessome.bed file (optional)")
+    parser.add_argument("--snps", default=config.get('snps'), help="Optional SNP bed file")
+    parser.add_argument("--filter-bed", default=config.get('filter_bed'), help="Optional region filter bed file")
+    parser.add_argument("--tss-features", type=str, default=config.get('tss_features', "transcript,mRNA,noncoding_transcript,lncRNA,sRNA,tRNA,rRNA"), help="Comma-separated list of GFF3 features to use as anchors for the TSS; promoter regions are then calculated upstream of these anchors (default: transcript,mRNA,noncoding_transcript,lncRNA,sRNA,tRNA,rRNA)")
+    parser.add_argument("--promoter-upstream", type=int, default=config.get('promoter_upstream', 1107), help="Distance upstream of TSS to include in promoter region (default: 1107)")
+    parser.add_argument("--promoter-downstream", type=int, default=config.get('promoter_downstream', 107), help="Distance downstream of TSS to include in promoter region (default: 107)")
+    parser.add_argument("--cutoff", type=float, default=config.get('cutoff', 0.65), help="Doench score cutoff")
+    parser.add_argument("--target-len", type=int, default=config.get('target_len', 20), help="Expected target sequence length (default 20)")
+    parser.add_argument("--pam-len", type=int, default=config.get('pam_len', 3), help="Expected PAM length (default 3)")
+    parser.add_argument("--mem", type=str, default=config.get('mem', "8g"), help="Memory limit for FlashFry (e.g., 4g, 8g, 16g)")
+    parser.add_argument("--metrics", type=str, default=config.get('metrics', "doench2014ontarget"), help="FlashFry scoring metrics, comma-separated (default: doench2014ontarget)")
 
     args = parser.parse_args()
 
+    setup_logging()
     pipeline = CrispyPipeline(args)
     # bed_file = pipeline.prepare_targets()
     targets = pipeline.prepare_targets()
     if targets is None or len(targets) == 0:
-        print("ERROR: No target regions were found in the GFF. Check your feature labels (exon, CDS, mRNA, transcript).")
+        logging.error("No target regions were found in the GFF. Check your feature labels (exon, CDS, mRNA, transcript).")
         exit(1)
     scored_file = pipeline.run_flashfry(targets)
     pipeline.post_process(scored_file)

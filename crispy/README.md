@@ -14,9 +14,9 @@ It is inspired by and aims to, in part, replicate the output of the [CRISPRtarge
 ### 1. Target Preparation (`prepare_targets`)
 The pipeline identifies potential target regions based on the GFF3 annotation:
 *   **Exons/CDS**: Directly extracts all coding sequences.
-*   **Promoters**: Automatically defines promoter regions based on the Transcription Start Site (TSS). 
-    *   *Positive strand*: TSS - 1107bp to TSS + 107bp.
-    *   *Negative strand*: TSS - 107bp to TSS + 1107bp.
+*   **Promoters**: Automatically defines promoter regions by using transcript-level features as anchors for the **Transcription Start Site (TSS)**. The pipeline then defines a window extending primarily upstream of this anchor to capture the regulatory promoter region.
+    *   *Default Window*: Positive strand (TSS - 1107bp to TSS + 107bp), Negative strand (TSS - 107bp to TSS + 1107bp).
+    *   *Customization*: Users can specify the anchor features via `--tss-features` and the window size via `--promoter-upstream` and `--promoter-downstream`.
 *   **Recursive Gene Filtering**: If a gene list is provided, the pipeline doesn't just look for the gene ID; it recursively finds all children (e.g., Gene $\rightarrow$ mRNA $\rightarrow$ Exon) to ensure no target regions are missed.
 
 ### 2. Sequence Extraction (`extract_sequences`)
@@ -44,20 +44,57 @@ This is where the raw FlashFry data is refined:
 2.  **FlashFry JAR**: You must have `FlashFry-assembly-1.15.jar` in the same directory as the script.
 3.  **Python 3.x**
 
-### Installation
+## Local Setup and Execution
+
+### 1. Prerequisites
+*   **Java Runtime Environment (JRE):** Required to execute the FlashFry JAR. Ensure `java` is available in your system path.
+*   **Python 3.x:** Required for the pipeline wrapper.
+
+### 2. Environment Setup
+It is highly recommended to use a virtual environment to ensure dependency isolation:
+
 ```bash
-# 1. Create and activate a virtual environment
+# Create and activate a virtual environment
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 
-# 2. Install required Python packages
+# Install required Python packages
 pip install -r crispy/requirements.txt
 ```
 
-### Running Example
-To run the pipeline, execute `pipeline.py` from the command line. Below is a comprehensive example including optional filters.
+### 3. Acquiring FlashFry
+The pipeline requires the FlashFry assembly JAR to be present in the project root directory. Use the following command to download the specific version required by this pipeline:
 
-#### Example Command:
+```bash
+wget https://github.com/mckennalab/FlashFry/releases/download/1.15/FlashFry-assembly-1.15.jar
+```
+*Note: The file must be named exactly `FlashFry-assembly-1.15.jar` and located in the root directory for the pipeline to execute correctly.*
+
+### Configuration and Execution
+
+The pipeline can be run using command-line arguments or a YAML configuration file for better reproducibility.
+
+#### Option A: Using a Configuration File (Recommended)
+Create a `config.yaml` file:
+```yaml
+gff: "genome_annotation.gff3"
+ref: "genome_reference.fasta"
+genes: "target_genes.csv"
+accessome: "chromatin_accessibility.bed"
+snps: "known_snps.bed"
+tss_features: "transcript,mRNA,noncoding_transcript,lncRNA,sRNA,tRNA,rRNA"
+promoter_upstream: 1107
+promoter_downstream: 107
+cutoff: 0.6
+mem: "16g"
+metrics: "doench2014ontarget"
+```
+Run the pipeline with:
+```bash
+python crispy/pipeline.py --config config.yaml
+```
+
+#### Option B: Using Command Line Arguments
 ```bash
 python crispy/pipeline.py \
     --gff genome_annotation.gff3 \
@@ -65,6 +102,9 @@ python crispy/pipeline.py \
     --genes target_genes.csv \
     --accessome chromatin_accessibility.bed \
     --snps known_snps.bed \
+    --tss-features "transcript,mRNA,lncRNA" \
+    --promoter-upstream 1200 \
+    --promoter-downstream 100 \
     --cutoff 0.6 \
     --mem 16g \
     --metrics doench2014ontarget,mitchell2018
@@ -73,12 +113,16 @@ python crispy/pipeline.py \
 #### Argument Breakdown:
 | Argument | Required | Description |
 | :--- | :--- | :--- |
+| `--config` | No | Path to a YAML configuration file. |
 | `--gff` | **Yes** | Path to the GFF3 annotation file. |
 | `--ref` | **Yes** | Path to the reference genome FASTA. |
 | `--genes` | No | CSV containing a `Gene.ID` column to limit targets to specific genes. |
 | `--filter-bed` | No | BED file used to strictly limit the search space to specific genomic regions. |
 | `--accessome`| No | BED file of accessible regions to prioritize "open" DNA in the final ranking. |
 | `--snps` | No | BED file of SNPs to calculate sequence entropy. |
+| `--tss-features` | No | Comma-separated list of GFF3 features to use as TSS anchors. |
+| `--promoter-upstream` | No | Distance upstream of TSS for promoter window (Default: 1107). |
+| `--promoter-downstream` | No | Distance downstream of TSS for promoter window (Default: 107). |
 | `--cutoff` | No | Minimum Doench score to be considered "over cutoff" (Default: 0.65). |
 | `--mem` | No | Memory allocated to the Java VM (Default: 8g). |
 | `--metrics` | No | Comma-separated FlashFry scoring metrics. |

@@ -1,24 +1,30 @@
-# IDMapping Module Documentation
+# IDMapping: Incremental Orthology Mapping Engine
 
 ## Overview
-The **IDMapping** module is a bioinformatics utility designed to map genomic feature IDs from a source organism to their corresponding homologs in other species (specifically Human and Mouse). 
+The **IDMapping** module is a professional bioinformatics utility designed to map genomic feature IDs from a source organism to their corresponding homologs in any number of target species.
 
-It solves a common problem in comparative genomics: BLAST results often return hits for specific transcripts or exons (children), but researchers typically need to know which top-level **Gene** (parent) those features belong to. This module parses GFF3 annotation files to resolve these hierarchical relationships and filters BLAST results based on statistical significance.
+Unlike simple BLAST wrappers, this engine implements an **Incremental Backbone** strategy. It allows researchers to build a master orthology table one species at a time, resolving complex GFF3 hierarchies to ensure that mappings are attributed to the root **Gene** rather than individual isoforms or exons.
 
 ---
 
 ## How the Code Works
 
 ### 1. GFF3 Hierarchy Resolution (`GFF3Resolver`)
-The `GFF3Resolver` class acts as a map of the genome's organization.
-*   **Normalization**: It automatically removes prefixes (like `KY21:`) from IDs to ensure they match the query IDs (`qseqid`) found in BLAST output files.
-*   **The "Climb"**: The `resolve_to_gene` method implements a recursive lookup. If a feature ID is provided (e.g., an exon), the resolver looks up its parent, then that parent's parent, and so on, until it reaches a feature labeled as a `'gene'`. This ensures that all sub-features are correctly attributed to their root gene.
+The `GFF3Resolver` ensures biological accuracy by navigating the genomic hierarchy:
+*   **Normalization**: Automatically removes prefixes (e.g., `KY21:`) to match BLAST query IDs.
+*   **BFS Resolution**: Uses a Breadth-First Search (BFS) to climb from any feature (exon, CDS, mRNA) to its closest ancestor labeled as a `'gene'`. This correctly handles multi-parent features and alternative splicing.
 
-### 2. BLAST Result Processing (`create_mapping`)
-The module processes BLAST output files for multiple species using the following logic:
-*   **Significance Filtering**: By default, only hits with an E-value below a specific threshold (e.g., $1e-50$) are kept.
-*   **Top-Hit Fallback**: If the `--include-top` flag is enabled, the pipeline will keep the best possible hit for a query even if it fails to meet the E-value threshold.
-*   **Data Enrichment**: For every hit, the module attaches the resolved **Gene ID**, the **Feature Type**, and the **Species Gene Symbol**.
+### 2. Optimal Hit Selection Logic
+Instead of simply taking the top BLAST hit, the engine identifies the **Optimal Hit** for each gene:
+*   **Robustness Check**: If the top $N$ hits all resolve to the same target gene, that mapping is marked as high-confidence.
+*   **Significance Gap**: The engine evaluates the bitscore gap between the top hit and subsequent hits to distinguish between a clear ortholog and a family of paralogs.
+*   **Primary vs. Secondary**: The best biological candidate is assigned as the `Primary` hit. All other hits passing the E-value threshold are concatenated into a `Secondary` column, separated by a pipe (`|`).
+
+### 3. Incremental Backbone Workflow
+The module maintains a master table (the "Backbone") of all genes in the reference GFF3:
+*   **Initialization**: If no output file exists, the backbone is initialized with all genes from the reference GFF3.
+*   **Additive Mapping**: Each new species is joined to the backbone via a left-merge.
+*   **Collision Handling**: If a species is re-mapped, the existing columns for that species are overwritten with the new results.
 
 ---
 
@@ -83,38 +89,63 @@ blastp -query query_proteins.fasta \
 
 ### Prerequisites
 *   **Python 3.x**
-*   **Pandas**: `pip install pandas`
+*   **Pandas & PyYAML**: `pip install pandas PyYAML`
 
-### Running the Resolver
-Once you have your `.tsv` results and your GFF3 annotation, run the mapping script to resolve the feature IDs to top-level genes.
+### Running the Incremental Mapper
+The mapping is performed one species at a time. Run the script for each species you wish to add to your master table.
 
-#### Example Command:
+#### Step 1: Map the first species (e.g., Human)
 ```bash
 python idmapping/run_mapping.py \
     --gff source_organism.gff3 \
-    --human human_results.tsv \
-    --mouse mouse_results.tsv \
-    --output final_ortholog_map.tsv \
-    --evalue 1e-50 \
-    --include-top
+    --blast-file human_results.tsv \
+    --species Human \
+    --output orthologs.tsv
+```
+*This initializes the table with all genes from your GFF and adds `Human_primary` and `Human_secondary` columns.*
+
+#### Step 2: Map subsequent species (e.g., Mouse)
+```bash
+python idmapping/run_mapping.py \
+    --gff source_organism.gff3 \
+    --blast-file mouse_results.tsv \
+    --species Mouse \
+    --output orthologs.tsv
+```
+*This loads the existing `orthologs.tsv` and appends `Mouse_primary` and `Mouse_secondary` columns.*
+
+#### Step 3: Using a Configuration File
+Create a `mapping_config.yaml`:
+```yaml
+gff: "source_organism.gff3"
+output: "orthologs.tsv"
+evalue: 1e-50
+include_top: true
+```
+Run:
+```bash
+python idmapping/run_mapping.py --config mapping_config.yaml --blast-file zfish.tsv --species Zebrafish
 ```
 
 #### Argument Breakdown:
 | Argument | Required | Description |
 | :--- | :--- | :--- |
+| `--config` | No | Path to a YAML configuration file. |
 | `--gff` | **Yes** | Path to the source organism's GFF3 file. |
-| `--human` | **Yes** | Path to the BLAST results against the Human genome. |
-| `--mouse` | **Yes** | Path to the BLAST results against the Mouse genome. |
-| `--output` | **Yes** | Path where the final mapping TSV will be saved. |
+| `--blast-file` | **Yes** | Path to the BLAST results TSV for the species. |
+| `--species` | **Yes** | Label for the species (e.g., 'Human', 'Mouse'). |
+| `--output` | **Yes** | Path to the output TSV (will be updated incrementally). |
 | `--evalue` | No | E-value threshold for significance (Default: `1e-50`). |
 | `--include-top`| No | If present, keeps the top hit even if it's above the E-value threshold. |
 
 ### Output Format
-The resulting `final_ortholog_map.tsv` is a tab-separated file with the following columns:
-*   `qseqid`: The original query ID from the BLAST search.
-*   `feature_type`: The type of feature (e.g., exon, CDS).
-*   `gene_id`: The resolved top-level Gene ID.
-*   `species_gene_symbol`: The gene symbol of the homolog in the target species.
-*   `species`: Either "Human" or "Mouse".
-*   `evalue`: The BLAST E-value.
-*   `bitscore`: The BLAST bitscore.
+The resulting `orthologs.tsv` is a wide table where each row is a unique gene from your reference genome.
+
+| gene_id | {Species}_primary | {Species}_secondary | ... |
+| :--- | :--- | :--- | :--- |
+| GENE_001 | H_GENE_A | H_GENE_B$\vert$H_GENE_C | ... |
+| GENE_002 | $\text{NaN}$ | $\text{NaN}$ | ... |
+
+*   **`gene_id`**: The resolved root gene ID from your reference GFF3.
+*   **`{Species}_primary`**: The optimal hit based on bitscore and robustness.
+*   **`{Species}_secondary`**: All other hits passing the E-value threshold, separated by a pipe (`|`).
