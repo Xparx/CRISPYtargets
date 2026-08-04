@@ -31,24 +31,20 @@ The pipeline wraps the FlashFry Java JAR to perform three main tasks:
 ### 4. Post-Processing & Ranking (`post_process`)
 This is where the raw FlashFry data is refined:
 *   **Accessibility**: If an "accessome" BED file is provided, it calculates the overlap between the target and open chromatin regions.
-*   **SNP Entropy**: If a SNP BED file is provided, it replaces bases with IUPAC ambiguity codes and calculates an entropy score to penalize guides that hit highly polymorphic sites.
+*   **SNP Entropy**: If a SNP BED file is provided (from the `lift_snps.py` liftover pipeline), each overlapping SNP is converted to its **IUPAC ambiguity code** (e.g., A/G → R, C/T → Y). These codes replace bases in the guide sequence, and Shannon entropy is calculated per guide. Guides at polymorphic sites receive higher entropy scores and rank lower. Individual SNP positions are annotated in the `snp_overlaps` column.
+*   **SNP Re-scoring** (optional): If `--rescore-snps` is enabled, FlashFry is re-run on SNP-modified sequences for guides that directly overlap SNPs. Results appear in `{metric}_snp` columns alongside reference scores, allowing direct comparison of reference vs. variant guide performance.
 *   **Oligo Design**: Generates forward and reverse primer sequences for the guides, including a 'G' prefix for T7 promoter efficiency and specific overhangs (`agat` / `aaac`).
 *   **Final Ranking**: Sorts guides based on a hierarchy: `Cutoff` $\rightarrow$ `Doench Score` $\rightarrow$ `Accessibility` $\rightarrow$ `Entropy`.
 
 ---
 
-## Local Setup and Execution
-
-### Prerequisites
-1.  **Java Runtime Environment (JRE)**: Required to run FlashFry.
-2.  **FlashFry JAR**: You must have `FlashFry-assembly-1.15.jar` in the same directory as the script.
-3.  **Python 3.x**
 
 ## Local Setup and Execution
 
 ### 1. Prerequisites
-*   **Java Runtime Environment (JRE):** Required to execute the FlashFry JAR. Ensure `java` is available in your system path.
-*   **Python 3.x:** Required for the pipeline wrapper.
+1.  **Java Runtime Environment (JRE)**: Required to run FlashFry.
+2.  **FlashFry JAR**: You must have `FlashFry-assembly-1.15.jar` in the same directory as the script.
+3.  **Python 3.x**
 
 ### 2. Environment Setup
 It is highly recommended to use a virtual environment to ensure dependency isolation:
@@ -126,6 +122,9 @@ python crispy/pipeline.py \
 | `--cutoff` | No | Minimum Doench score to be considered "over cutoff" (Default: 0.65). |
 | `--mem` | No | Memory allocated to the Java VM (Default: 8g). |
 | `--metrics` | No | Comma-separated FlashFry scoring metrics. |
+| `--rescore-snps` | No | Re-run FlashFry scoring on SNP-modified sequences |
+| `--browser-bed` | No | Output BED file for genome browser visualization |
+| `--verbose` | No | Show FlashFry Java output (suppressed by default) |
 
 
 ### Difference between `--filter-bed` and `--accessome`
@@ -146,8 +145,66 @@ While both arguments take a BED file as input, they serve completely different p
 
 
 ### Output Files
-After a successful run, the following files will be generated in your working directory:
-*   `targets.bed`: The genomic regions selected for targeting.
-*   `targets.fasta`: The sequences sent to FlashFry.
-*   `targets.output.scored`: The raw scored output from FlashFry.
-*   **`final_sgrnas.tsv`**: The final ranked list containing the best guides, their scores, and the designed `fwd` and `rev` oligos.
+
+| File | Description |
+|------|-------------|
+| `targets.bed` | Genomic regions selected for targeting |
+| `targets.fasta` | Sequences sent to FlashFry |
+| `targets.output.scored` | Raw scored output from FlashFry |
+| **`final_sgrnas.tsv`** | Final ranked list with scores, annotations, and oligos |
+| `final_sgrnas.bed` | Genome browser BED file (with `--browser-bed`) |
+| `targets_snp.fasta` | SNP-modified sequences (with `--rescore-snps`) |
+| `targets_snp.output.scored` | Scored output with SNP variants (with `--rescore-snps`) |
+
+### Key Columns in `final_sgrnas.tsv`
+
+| Column | Description |
+|--------|-------------|
+| `gene_id` | Resolved root gene ID from GFF3 (first column) |
+| `feature` | Feature type (exon, CDS, promoter) |
+| `Chromosome`, `Start`, `End`, `Strand` | Genomic coordinates |
+| `target` | 23bp guide + PAM sequence |
+| `Doench2014OnTarget` | On-target efficiency score (reference) |
+| `entropy` | Shannon entropy based on overlapping SNPs (higher = more polymorphic) |
+| `snp_overlaps` | List of overlapping SNPs (e.g., `5:A>G\|12:C>T`) |
+| `num_snps` | Number of overlapping SNPs |
+| `{metric}_snp` | Re-scored metric with SNP variants (only if `--rescore-snps`) |
+| `fwd`, `rev` | Designed oligos for cloning |
+| `over_cutoff` | Whether guide passes the Doench cutoff |
+
+### Genome Browser Visualization
+
+With `--browser-bed`, a BED file is generated for IGV/UCSC:
+
+| Color | Meaning |
+|-------|---------|
+| Green | Passes cutoff, no SNPs |
+| Orange | Passes cutoff, but overlaps SNPs |
+| Red | Fails cutoff |
+
+Load in IGV: **File → Load from File → final_sgrnas.bed**
+
+### Running with SNP Input
+
+To use SNP data, first run the liftover pipeline (`lift_snps.py`) to convert SNP positions to your reference coordinates, then pass the resulting BED file to Crispy:
+
+```bash
+# Step 1: Lift SNPs to new assembly coordinates
+python3 idmapping/lift_snps.py \
+    --old-genome data/old_assembly.fa \
+    --new-genome data/new_assembly.fa \
+    --vcf data/snps.vcf.gz \
+    --output data/snps_lifted.vcf.gz \
+    --bed \
+    --threads 8 \
+    --preset asm10
+
+# Step 2: Run Crispy with lifted SNPs
+python crispy/pipeline.py \
+    --gff data/genome_annotation.gff3 \
+    --ref data/new_assembly.fa \
+    --snps data/snps_lifted.vcf.bed \
+    --genes data/target_genes.csv \
+    --rescore-snps \
+    --browser-bed
+```

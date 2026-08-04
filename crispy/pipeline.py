@@ -1,6 +1,7 @@
 import argparse
 import subprocess
 import os
+import sys
 import numpy as np
 import pandas as pd
 import pyranges as pr
@@ -8,13 +9,17 @@ import logging
 import yaml
 from pyfaidx import Fasta
 from utils import calculate_entropy, design_oligos, parse_flashfry_contig
-from utils import complement_iupac
+from utils import complement_iupac, snp_to_iupac
 import gc
 
 
-def run_command(cmd):
-    print(f"Executing: {cmd}")
-    subprocess.run(cmd, shell=True, check=True)
+def run_command(cmd, verbose=False):
+    logging.info(f"Executing: {cmd}")
+    if verbose:
+        subprocess.run(cmd, shell=True, check=True)
+    else:
+        subprocess.run(cmd, shell=True, check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 class CrispyPipeline:
@@ -185,17 +190,22 @@ class CrispyPipeline:
         if not os.path.exists(self.db):
             # Create a temporary directory for FlashFry indexing
             os.makedirs("build", exist_ok=True)
-            run_command(f"java -Xmx4g -jar {self.ff_jar} index --database {self.db} --reference {self.args.ref} --enzyme spcas9ngg --tmpLocation ./build")
+            run_command(f"java -Xmx4g -jar {self.ff_jar} index --database {self.db} --reference {self.args.ref} --enzyme spcas9ngg --tmpLocation ./build",
+                        verbose=True)
+        else:
+            logging.info("FlashFry database already exists: %s", self.db)
 
         # Extract sequences from PyRanges to FASTA
         targets_fasta = self.extract_sequences(targets_gr)
 
         # Discover
-        run_command(f"java -Xmx{self.args.mem} -jar {self.ff_jar} discover --database {self.db} --fasta {targets_fasta} --positionOutput --output targets.output")
+        run_command(f"java -Xmx{self.args.mem} -jar {self.ff_jar} discover --database {self.db} --fasta {targets_fasta} --positionOutput --output targets.output",
+                    verbose=getattr(self.args, 'verbose', False))
 
         # Score
         # Use the metrics specified in the arguments (defaults to doench2014ontarget)
-        run_command(f"java -Xmx{self.args.mem} -jar {self.ff_jar} score --input targets.output --output targets.output.scored --database {self.db} --scoringMetrics={self.args.metrics}")
+        run_command(f"java -Xmx{self.args.mem} -jar {self.ff_jar} score --input targets.output --output targets.output.scored --database {self.db} --scoringMetrics={self.args.metrics}",
+                    verbose=getattr(self.args, 'verbose', False))
 
         return "targets.output.scored"
 
@@ -234,71 +244,166 @@ class CrispyPipeline:
         else:
             logging.info("No accessome file provided. Skipping accessibility scoring.")
 
-        # 2. SNP Entropy
+        # Find sequence column early (needed for SNP annotation too)
+        expected_len = self.args.target_len + self.args.pam_len
+        seq_col = None
+        for col in df.columns:
+            first_val = df[col].dropna().iloc[0] if not df[col].dropna().empty else None
+            if isinstance(first_val, str) and len(first_val) == expected_len:
+                seq_col = col
+                break
+        if seq_col is None:
+            raise KeyError(f"Could not find a sequence column with length {expected_len}. Columns: {list(df.columns)}")
+        logging.info(f"Using column '{seq_col}' as the target sequence source.")
+
+        # 2. SNP Entropy and Annotation
         df['entropy'] = 0.0
-        if self.args.snps and os.path.exists(self.args.snps):
+        df['snp_overlaps'] = '.'
+        df['num_snps'] = 0
+        if self.args.snps:
+            if not os.path.exists(self.args.snps):
+                logging.error(f"SNP file not found: {self.args.snps}")
+                sys.exit(1)
             logging.info(f"Calculating SNP entropy using {self.args.snps}...")
             snp_gr = pr.read_bed(self.args.snps)
             if snp_gr.df.shape[1] < 3:
                 raise ValueError(f"SNP BED {self.args.snps} is malformed. Expected at least 3 columns (Chrom, Start, End).")
 
-            # Add original index and coordinates to target_gr to track back to df
-            target_gr_indexed = target_gr.assign(
-                orig_idx=target_gr.df.index,
-                t_start=target_gr.start,
-                t_end=target_gr.end
-            )
+            # Build overlap table using per-chromosome binary search
+            # (avoids OOM from pandas merge cross-product)
+            target_df = target_gr.df.copy()
+            target_df['orig_idx'] = target_df.index
 
-            # Join targets with SNPs to get all overlapping pairs
-            joined = target_gr_indexed.join(snp_gr)
-            j_df = joined.df
+            snp_df = snp_gr.df.copy()
+            snp_name_col = 'Name' if 'Name' in snp_df.columns else 'name'
 
-            # 1. VECTORIZED: Calculate relative positions for all overlaps at once
+            records = []
+            for chrom in target_df['Chromosome'].unique():
+                tgt_chr = target_df[target_df['Chromosome'] == chrom]
+                snp_chr = snp_df[snp_df['Chromosome'] == chrom]
+                if tgt_chr.empty or snp_chr.empty:
+                    continue
+
+                tgt_sorted = tgt_chr.sort_values('Start')
+                tgt_starts = tgt_sorted['Start'].values
+                tgt_ends = tgt_sorted['End'].values
+                tgt_orig = tgt_sorted['orig_idx'].values
+                tgt_strand = tgt_sorted['Strand'].values
+
+                snp_positions = snp_chr['Start'].values
+                snp_names = snp_chr[snp_name_col].values
+
+                right_idx = np.searchsorted(tgt_starts, snp_positions, side='right') - 1
+
+                for i in range(len(snp_positions)):
+                    idx = right_idx[i]
+                    while idx >= 0 and tgt_starts[idx] <= snp_positions[i]:
+                        if tgt_ends[idx] > snp_positions[i]:
+                            records.append((
+                                tgt_orig[idx], snp_positions[i], snp_names[i],
+                                tgt_strand[idx], tgt_starts[idx], tgt_ends[idx],
+                            ))
+                        idx -= 1
+
+            if records:
+                j_df = pd.DataFrame(records, columns=[
+                    'orig_idx', 'snp_pos', 'Name', 'Strand', 't_start', 't_end'
+                ])
+            else:
+                j_df = pd.DataFrame(columns=[
+                    'orig_idx', 'snp_pos', 'Name', 'Strand', 't_start', 't_end'
+                ])
+
+            # 1. Calculate relative positions
             j_df['rel_pos'] = np.where(
                 j_df['Strand'] == '+',
-                j_df['Start_2'] - j_df['t_start'],
-                j_df['t_end'] - j_df['Start_2'] - 1
+                j_df['snp_pos'] - j_df['t_start'],
+                j_df['t_end'] - j_df['snp_pos'] - 1
             )
 
-            # 2. VECTORIZED: Handle IUPAC complements for minus strand
-            j_df['snp_code'] = j_df['Name']
+            # 2. Convert SNP alleles to IUPAC code for entropy calculation
+            j_df['snp_code'] = j_df['Name'].apply(snp_to_iupac)
+            # Keep original for annotation display
+            j_df['snp_code_orig'] = j_df['snp_code']
+            # Complement for minus-strand guides (needed for sequence substitution)
             minus_mask = j_df['Strand'] == '-'
-            j_df.loc[minus_mask, 'snp_code'] = j_df.loc[minus_mask, 'Name'].apply(complement_iupac)
+            j_df.loc[minus_mask, 'snp_code'] = j_df.loc[minus_mask, 'snp_code'].apply(complement_iupac)
 
             # 3. GROUPED MUTATION: Only loop over targets that have at least one SNP
             grouped = j_df.groupby('orig_idx')
             entropy_results = {}
+            snp_annotations = {}
+            snp_sequences = {}
 
             for idx, group in grouped:
                 # Get original sequence
-                seq_list = list(df.at[idx, 'sequence'])
+                seq_list = list(df.at[idx, seq_col])
                 seq_len = len(seq_list)
                 
+                overlaps = []
                 for row in group.itertuples():
                     if 0 <= row.rel_pos < seq_len:
                         seq_list[row.rel_pos] = row.snp_code
+                        overlaps.append(f"{row.rel_pos}:{row.Name}>{row.snp_code_orig}")
                 
                 entropy_results[idx] = calculate_entropy(seq_list)
+                snp_annotations[idx] = '|'.join(overlaps) if overlaps else '.'
+                snp_sequences[idx] = seq_list
 
             # Map results back to the main dataframe
             df['entropy'] = df.index.map(entropy_results).fillna(0.0)
+            df['snp_overlaps'] = df.index.map(snp_annotations).fillna('.')
+            df['num_snps'] = df['snp_overlaps'].apply(lambda x: 0 if x == '.' else x.count('|') + 1)
+
+            # Re-score with SNPs incorporated (if requested)
+            if getattr(self.args, 'rescore_snps', False) and snp_sequences:
+                expected_len = self.args.target_len + self.args.pam_len
+                snp_fasta = "targets_snp.fasta"
+                with open(snp_fasta, 'w') as f:
+                    for idx, seq_list in snp_sequences.items():
+                        row = df.loc[idx]
+                        f.write(f">{row.gene_id}|{row.feature}|{row.Chromosome}:{row.Start}-{row.End}|{row.Strand}\n{''.join(seq_list)}\n")
+
+                logging.info("Running FlashFry on SNP-modified sequences...")
+                run_command(f"java -Xmx{self.args.mem} -jar {self.ff_jar} discover --database {self.db} --fasta {snp_fasta} --positionOutput --output targets_snp.output",
+                            verbose=getattr(self.args, 'verbose', False))
+                run_command(f"java -Xmx{self.args.mem} -jar {self.ff_jar} score --input targets_snp.output --output targets_snp.output.scored --database {self.db} --scoringMetrics={self.args.metrics}",
+                            verbose=getattr(self.args, 'verbose', False))
+
+                snp_df = pd.read_csv("targets_snp.output.scored", sep='\t')
+                snp_seq_col = None
+                for col in snp_df.columns:
+                    first_val = snp_df[col].dropna().iloc[0] if not snp_df[col].dropna().empty else None
+                    if isinstance(first_val, str) and len(first_val) == expected_len:
+                        snp_seq_col = col
+                        break
+                if snp_seq_col:
+                    # Only merge back guides that directly overlap SNPs
+                    # (other guides in the same target region are unaffected)
+                    snps_contigs = set(df.loc[j_df['orig_idx'].unique(), 'contig'])
+                    snp_df_filtered = snp_df[snp_df['contig'].isin(snps_contigs)]
+
+                    score_cols = [c for c in snp_df_filtered.columns
+                                  if c in df.columns
+                                  and c not in ['chrom', 'start', 'end', 'stop',
+                                                'strand', 'contig']]
+                    rename_map = {c: f'{c}_snp' for c in score_cols}
+                    # Merge on contig + target (unique per guide, not contig alone)
+                    snp_to_merge = snp_df_filtered[['contig', 'target'] + score_cols].rename(columns=rename_map)
+                    df = df.merge(snp_to_merge, on=['contig', 'target'], how='left')
+                    logging.info("Re-scored %d / %d guides that directly overlap SNPs",
+                                 len(snp_df_filtered), len(snp_df))
+                    # Clear _snp scores for guides that don't overlap any SNPs
+                    snp_score_cols = [c for c in df.columns if c.endswith('_snp')]
+                    df.loc[df['num_snps'] == 0, snp_score_cols] = np.nan
+                else:
+                    logging.warning("Could not find matching sequence column in SNP output")
+            elif getattr(self.args, 'rescore_snps', False):
+                logging.info("No SNPs found to re-score")
+            else:
+                logging.info("SNP re-scoring skipped (use --rescore-snps to enable)")
 
         # 3. Oligo Design
-        # Dynamically find the sequence column (it's the one containing the 23bp target+PAM)
-        seq_col = None
-        expected_len = self.args.target_len + self.args.pam_len
-        for col in df.columns:
-            # Check if the first non-null value in the column is a string of the correct length
-            first_val = df[col].dropna().iloc[0] if not df[col].dropna().empty else None
-            if isinstance(first_val, str) and len(first_val) == expected_len:
-                seq_col = col
-                break
-
-        if seq_col is None:
-            raise KeyError(f"Could not find a sequence column with length {expected_len} in the FlashFry output. Columns found: {list(df.columns)}")
-
-        logging.info(f"Using column '{seq_col}' as the target sequence source.")
-
         oligos = df.apply(
             lambda row: design_oligos(
                 row[seq_col],
@@ -343,8 +448,60 @@ class CrispyPipeline:
         # Return full sorted list for selection
         final = df
 
+        # Move gene_id to first column
+        cols = list(final.columns)
+        if 'gene_id' in cols:
+            cols.remove('gene_id')
+            cols.insert(0, 'gene_id')
+            final = final[cols]
+
         final.to_csv("final_sgrnas.tsv", sep='\t', index=False)
         logging.info("Done. Results saved to final_sgrnas.tsv")
+
+        # Genome browser BED output
+        if getattr(self.args, 'browser_bed', False):
+            self._write_browser_bed(final)
+
+    def _write_browser_bed(self, df):
+        """Write a BED6 file for genome browser (IGV, UCSC).
+
+        Colors:
+          green  = passes cutoff, no SNPs
+          orange = passes cutoff, has SNPs
+          red    = fails cutoff
+        """
+        bed_path = "final_sgrnas.bed"
+        # Sort by chromosome then absolute position (numeric)
+        bed_df = df.copy()
+        bed_df['abs_start'] = bed_df['Start'].astype(int) + bed_df['start'].astype(int)
+        bed_df['abs_end'] = bed_df['Start'].astype(int) + bed_df['stop'].astype(int)
+        bed_df = bed_df.sort_values(['Chromosome', 'abs_start']).reset_index(drop=True)
+
+        with open(bed_path, 'w') as f:
+            f.write("track name=CrispyGuides type=bed visibility=2 itemRgb=On\n")
+            for _, row in bed_df.iterrows():
+                chrom = row['Chromosome']
+                abs_start = int(row['Start']) + int(row['start'])
+                abs_end = int(row['Start']) + int(row['stop'])
+                strand = row.get('Strand', '.')
+                gene = row.get('gene_id', '.')
+                seq = row.get('target', '.')
+                n_snps = int(row.get('num_snps', 0))
+                score_raw = row.get('Doench2014OnTarget', 0)
+                score_val = int(score_raw * 1000) if pd.notna(score_raw) else 0
+                over = row.get('over_cutoff', False)
+
+                if not over:
+                    rgb = "200,0,0"       # red — fails cutoff
+                elif n_snps > 0:
+                    rgb = "255,140,0"     # orange — passes but has SNPs
+                else:
+                    rgb = "0,180,0"       # green — passes, no SNPs
+
+                snp_tag = f" [SNPs:{n_snps}]" if n_snps > 0 else ""
+                name = f"{gene}|{seq}{snp_tag}"
+                f.write(f"{chrom}\t{abs_start}\t{abs_end}\t{name}\t{score_val}\t{strand}\t{rgb}\n")
+        logging.info("Genome browser BED written to %s", bed_path)
 
 
 def setup_logging(log_name="crispy.log"):
@@ -395,6 +552,10 @@ if __name__ == "__main__":
     parser.add_argument("--pam-len", type=int, default=config.get('pam_len', 3), help="Expected PAM length (default 3)")
     parser.add_argument("--mem", type=str, default=config.get('mem', "8g"), help="Memory limit for FlashFry (e.g., 4g, 8g, 16g)")
     parser.add_argument("--metrics", type=str, default=config.get('metrics', "doench2014ontarget"), help="FlashFry scoring metrics, comma-separated (default: doench2014ontarget)")
+    parser.add_argument("--rescore-snps", action="store_true", help="Re-run FlashFry scoring with SNPs incorporated into target sequences")
+    parser.add_argument("--browser-bed", action="store_true",
+                        help="Output a BED file for genome browser visualization")
+    parser.add_argument("--verbose", action="store_true", help="Show FlashFry Java output")
 
     args = parser.parse_args()
 

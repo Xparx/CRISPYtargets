@@ -18,6 +18,26 @@ def complement_iupac(char):
     """Returns the complement of an IUPAC ambiguity code."""
     return IUPAC_COMPLEMENT.get(char.upper(), char)
 
+
+# IUPAC pair mapping for biallelic SNPs
+_IUPAC_PAIRS = {
+    frozenset(['A', 'C']): 'M',
+    frozenset(['A', 'G']): 'R',
+    frozenset(['A', 'T']): 'W',
+    frozenset(['C', 'G']): 'S',
+    frozenset(['C', 'T']): 'Y',
+    frozenset(['G', 'T']): 'K',
+}
+
+def snp_to_iupac(name):
+    """Convert SNP name (chrom:pos:ref/alt) to IUPAC ambiguity code."""
+    try:
+        ref_alt = name.split(':')[2]
+        ref, alt = ref_alt.split('/')
+        return _IUPAC_PAIRS.get(frozenset([ref.upper(), alt.upper()]), 'N')
+    except Exception:
+        return 'N'
+
 ENTROPY_WEIGHTS = {
     'M': 1.0, 'R': 1.0, 'W': 1.0, 'S': 1.0, 'Y': 1.0, 'K': 1.0,
     'V': -1/3, 'H': -1/3, 'D': -1/3, 'B': -1/3,
