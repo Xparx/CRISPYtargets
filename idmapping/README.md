@@ -300,6 +300,73 @@ The log reports how many variants were successfully lifted and how many failed, 
 - The mapping is determined by the alignment, not hardcoded
 - Check PAF output to see which old-genome chromosomes map to which new-genome chromosomes: `cut -f1,6 alignment.paf | sort -u`
 
+## SNP Source and Preprocessing
+
+The input SNPs were obtained from [CRISPOR's ci3 genome page](https://crispor.gi.ucsc.edu/genomes/ci3), which provides variant annotations for the *Ciona robusta* (ci3) assembly.
+
+### Obtaining the SNP VCF
+
+The SNP data comes from the KH2013 genome build (ci3 assembly) as provided by CRISPOR:
+
+1. Navigate to [https://crispor.gi.ucsc.edu/genomes/ci3](https://crispor.gi.ucsc.edu/genomes/ci3)
+2. Download the variant file `Ghost_SNPs.vcf.gz` — this contains SNP positions on the KH2013 (ci3) assembly
+3. Filter to main chromosomes (KhC1–KhC14) if the VCF contains scaffolds:
+
+```bash
+bcftools view \
+    -r KhC1,KhC2,KhC3,KhC4,KhC5,KhC6,KhC7,KhC8,KhC9,KhC10,KhC11,KhC12,KhC13,KhC14 \
+    Ghost_SNPs.vcf.gz | bgzip > Ghost_SNPs_main.vcf.gz
+tabix -p vcf Ghost_SNPs_main.vcf.gz
+```
+
+### Lifting SNPs to the new assembly
+
+The SNPs are in KH2013 (ci3/old) coordinates and must be lifted to the new KY2021 assembly (`HT.Ref.fasta`) before they can be used by the Crispy pipeline:
+
+```bash
+python3 idmapping/lift_snps.py \
+    --old-genome data/KH2013_main.fa \
+    --new-genome data/HT.Ref.fasta \
+    --vcf data/Ghost_SNPs_main.vcf.gz \
+    --output data/Ghost_SNPs_lifted.vcf.gz \
+    --bed \
+    --threads 8 \
+    --preset asm10 \
+    --outdir data/
+```
+
+### Output files
+
+| File | Description |
+|------|-------------|
+| `Ghost_SNPs_lifted_kh2013.vcf.gz` | Lifted VCF with new-genome coordinates |
+| `Ghost_SNPs_lifted_kh2013.bed` | BED file for Crispy pipeline input |
+
+The BED file format (6 columns):
+
+| Column | Example | Description |
+|--------|---------|-------------|
+| chrom | Chr1 | New-genome chromosome |
+| start | 108229 | 0-based start position |
+| end | 108230 | 1-based end position (1bp SNP) |
+| name | KhC1:211:C/A | Original SNP ID from ci3 |
+| score | 1000 | QUAL from VCF (or 1000 if missing) |
+| strand | . | Always . for SNPs |
+
+### Feeding SNPs into Crispy
+
+Use the lifted BED file with the `--snps` argument:
+
+```bash
+python3 crispy/pipeline.py \
+    --gff data/HT.KY21Gene.2.gff3 \
+    --ref data/HT.Ref.fasta \
+    --snps data/Ghost_SNPs_lifted_kh2013.bed \
+    --genes data/genelist.tsv \
+    --rescore-snps \
+    --browser-bed
+```
+
 ## Notes
 
 - Chromosome name correspondence is derived automatically from the alignment

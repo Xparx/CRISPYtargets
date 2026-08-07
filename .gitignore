@@ -23,6 +23,19 @@ wheels/
 .installed.cfg
 *.egg
 
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Crispy pipeline intermediates
+crispy/htky_db/
+crispy/build/
+
+# Derived model files (regenerate with convert_rs3_model.py)
+crispy/*.pkl
+crispy/*.npy
+
 # Virtual Environments
 venv/
 .venv/
@@ -74,3 +87,4 @@ final_sgrnas.tsv
 Thumbs.db
 
 .aider*
+deprecated

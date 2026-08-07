@@ -365,15 +365,13 @@ def main():
     ap.add_argument("--vcf",        required=True,
                     help="Input VCF(.gz) with old-genome coordinates")
     ap.add_argument("--output",     required=True,
-                    help="Output VCF with lifted coordinates (use .vcf.gz for compressed)")
+                    help="Output directory for lifted VCF and BED files")
     ap.add_argument("--bed",        action="store_true",
                     help="Also output a BED file with lifted positions")
     ap.add_argument("--threads",    type=int, default=8)
     ap.add_argument("--preset",     default="asm5",
                     choices=["asm5", "asm10", "asm20", "map-ont", "map-hifi"],
                     help="Minimap2 preset for alignment (default: asm5)")
-    ap.add_argument("--outdir", default=None,
-                    help="Directory for intermediate files (default: same as output)")
     ap.add_argument("--keep-intermediates", action="store_true",
                     help="Do not delete the intermediate PAF")
     ap.add_argument("-v", "--verbose", action="store_true")
@@ -385,13 +383,17 @@ def main():
         datefmt="%H:%M:%S",
     )
 
-    # Resolve output directory
-    if args.outdir:
-        outdir = args.outdir
-    else:
-        outdir = os.path.dirname(args.output) or "."
+    # Resolve output directory and derive filenames
+    outdir = args.output
     os.makedirs(outdir, exist_ok=True)
     logging.info("Output directory: %s", outdir)
+
+    # Derive output filenames from input VCF
+    vcf_base = os.path.splitext(os.path.basename(args.vcf))[0]
+    if vcf_base.endswith('.gz'):
+        vcf_base = vcf_base[:-3]
+    output_vcf = os.path.join(outdir, f"{vcf_base}_lifted.vcf.gz")
+    output_bed = os.path.join(outdir, f"{vcf_base}_lifted.bed")
 
     # ── step 0: check VCF file ───────────────────────────────────────────
     check_vcf_file(args.vcf)
@@ -428,7 +430,7 @@ def main():
                  sorted(mapper.blocks.keys()))
 
     # ── step 5: lift VCF ─────────────────────────────────────────────────
-    lift_vcf(args.vcf, mapper, args.output, output_bed=args.bed)
+    lift_vcf(args.vcf, mapper, output_vcf, output_bed=args.bed)
 
     # ── cleanup ──────────────────────────────────────────────────────────
     if not args.keep_intermediates:

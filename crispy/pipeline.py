@@ -10,6 +10,7 @@ import yaml
 from pyfaidx import Fasta
 from utils import calculate_entropy, design_oligos, parse_flashfry_contig
 from utils import complement_iupac, snp_to_iupac
+from doench2016 import score_guides
 import gc
 
 
@@ -25,8 +26,9 @@ def run_command(cmd, verbose=False):
 class CrispyPipeline:
     def __init__(self, args):
         self.args = args
-        self.ff_jar = "FlashFry-assembly-1.15.jar"
-        self.db = "htky_db"
+        self.outdir = args.outdir
+        self.ff_jar = args.flashfry_jar
+        self.db = os.path.join(args.outdir, "htky_db")
 
     def prepare_targets(self):
         logging.info("Preparing target regions...")
@@ -74,6 +76,12 @@ class CrispyPipeline:
 
         # Combine exons and promoters by concatenating their DataFrames
         targets_df = pd.concat([exons.df, promoters.df])
+
+        # Add flanking sequence so FlashFry has context for Doench scoring
+        # Doench needs ~17bp of context on each side of the guide
+        flank = max(self.args.promoter_upstream, self.args.promoter_downstream, 100)
+        targets_df['Start'] = (targets_df['Start'] - flank).clip(lower=0)
+        targets_df['End'] = targets_df['End'] + flank
         targets = pr.PyRanges(targets_df)
 
         # Optional: Filter by provided gene list
@@ -160,12 +168,12 @@ class CrispyPipeline:
             self.gene_map[fid] = resolve_to_gene(fid)
         # -----------------------------
 
-        targets.to_bed("targets.bed")
+        targets.to_bed(os.path.join(self.outdir, "targets.bed"))
         return targets
 
     def extract_sequences(self, targets_gr):
         logging.info("Extracting sequences for FlashFry...")
-        fasta_out = "targets.fasta"
+        fasta_out = os.path.join(self.outdir, "targets.fasta")
         genome = Fasta(self.args.ref)
 
         with open(fasta_out, 'w') as f_out:
@@ -189,8 +197,8 @@ class CrispyPipeline:
         # Index if DB doesn't exist
         if not os.path.exists(self.db):
             # Create a temporary directory for FlashFry indexing
-            os.makedirs("build", exist_ok=True)
-            run_command(f"java -Xmx4g -jar {self.ff_jar} index --database {self.db} --reference {self.args.ref} --enzyme spcas9ngg --tmpLocation ./build",
+            os.makedirs(os.path.join(self.outdir, "build"), exist_ok=True)
+            run_command(f"java -Xmx4g -jar {self.ff_jar} index --database {self.db} --reference {self.args.ref} --enzyme spcas9ngg --tmpLocation {os.path.join(self.outdir, 'build')}",
                         verbose=True)
         else:
             logging.info("FlashFry database already exists: %s", self.db)
@@ -199,15 +207,14 @@ class CrispyPipeline:
         targets_fasta = self.extract_sequences(targets_gr)
 
         # Discover
-        run_command(f"java -Xmx{self.args.mem} -jar {self.ff_jar} discover --database {self.db} --fasta {targets_fasta} --positionOutput --output targets.output",
+        run_command(f"java -Xmx{self.args.mem} -jar {self.ff_jar} discover --database {self.db} --fasta {targets_fasta} --positionOutput --output {os.path.join(self.outdir, 'targets.output')}",
                     verbose=getattr(self.args, 'verbose', False))
 
         # Score
-        # Use the metrics specified in the arguments (defaults to doench2014ontarget)
-        run_command(f"java -Xmx{self.args.mem} -jar {self.ff_jar} score --input targets.output --output targets.output.scored --database {self.db} --scoringMetrics={self.args.metrics}",
+        run_command(f"java -Xmx{self.args.mem} -jar {self.ff_jar} score --input {os.path.join(self.outdir, 'targets.output')} --output {os.path.join(self.outdir, 'targets.output.scored')} --database {self.db} --scoringMetrics={self.args.metrics}",
                     verbose=getattr(self.args, 'verbose', False))
 
-        return "targets.output.scored"
+        return os.path.join(self.outdir, "targets.output.scored")
 
     def post_process(self, scored_file):
         logging.info("Post-processing and scoring...")
@@ -255,6 +262,62 @@ class CrispyPipeline:
         if seq_col is None:
             raise KeyError(f"Could not find a sequence column with length {expected_len}. Columns: {list(df.columns)}")
         logging.info(f"Using column '{seq_col}' as the target sequence source.")
+
+        # 1.5 Doench 2016 Rule Set 2 on-target scoring
+        logging.info("Computing Doench 2016 on-target scores...")
+        guides_20bp = df[seq_col].str[:self.args.target_len].tolist()
+        pams = df[seq_col].str[self.args.target_len:self.args.target_len + self.args.pam_len].tolist()
+
+        # Extract flanking sequence from reference for accurate features
+        genome = Fasta(self.args.ref)
+
+        def revcomp(seq):
+            comp = {'A':'T','T':'A','C':'G','G':'C','N':'N'}
+            return ''.join(comp.get(c, 'N') for c in reversed(seq.upper()))
+
+        def get_flank(chrom, guide_start, strand):
+            if strand == '-':
+                # Reverse strand: upstream on reverse = AFTER guide on forward
+                left_start = guide_start + self.args.target_len
+                left = str(genome[chrom][left_start:left_start + 5].seq) if left_start + 5 <= len(genome[chrom]) else None
+                # Downstream on reverse = BEFORE guide on forward
+                right_end = guide_start
+                right = str(genome[chrom][right_end - 2:right_end].seq) if right_end >= 2 else None
+                return (revcomp(left) if left else None,
+                        revcomp(right) if right else None)
+            # Forward strand
+            left = str(genome[chrom][guide_start - 5:guide_start].seq) if guide_start >= 5 else None
+            right_start = guide_start + self.args.target_len + self.args.pam_len
+            right = str(genome[chrom][right_start:right_start + 2].seq) if right_start + 2 <= len(genome[chrom]) else None
+            return left, right
+
+        guide_starts = (df['Start'].astype(int) + df['start'].astype(int)).values
+        strands = df['Strand'].values
+        chroms = df['Chromosome'].values
+        flanks = [get_flank(c, g, s) for c, g, s in zip(chroms, guide_starts, strands)]
+
+        df['Doench2016OnTarget'] = score_guides(guides_20bp, flanks=flanks, pams=pams)
+        logging.info("Doench 2016 scores computed for %d guides", len(df))
+
+        # Rule Set 3 scoring (optional)
+        if getattr(self.args, 'rs3', False):
+            try:
+                from rs3score import score_guides as rs3_score_guides
+                # rs3 needs 30mers: 5bp flank + 20bp guide + 3bp PAM + 2bp flank
+                rs3_seqs = []
+                for i in range(len(df)):
+                    flank5 = flanks[i][0] if flanks[i][0] else "NNNNN"
+                    flank3 = flanks[i][1] if flanks[i][1] else "NN"
+                    left = flank5[-5:] if len(flank5) >= 5 else flank5.rjust(5, "N")
+                    right = flank3[:2] if len(flank3) >= 2 else flank3.ljust(2, "N")
+                    s30 = (left + guides_20bp[i] + pams[i] + right).upper()
+                    rs3_seqs.append(s30)
+                df['RuleSet3'] = rs3_score_guides(rs3_seqs)
+                logging.info("Rule Set 3 scores computed for %d guides", len(df))
+            except ImportError:
+                logging.warning("rs3score module or sglearn/lightgbm not available, skipping RS3 scores")
+            except Exception as e:
+                logging.warning("Rule Set 3 scoring failed: %s", e)
 
         # 2. SNP Entropy and Annotation
         df['entropy'] = 0.0
@@ -358,19 +421,19 @@ class CrispyPipeline:
             # Re-score with SNPs incorporated (if requested)
             if getattr(self.args, 'rescore_snps', False) and snp_sequences:
                 expected_len = self.args.target_len + self.args.pam_len
-                snp_fasta = "targets_snp.fasta"
+                snp_fasta = os.path.join(self.outdir, "targets_snp.fasta")
                 with open(snp_fasta, 'w') as f:
                     for idx, seq_list in snp_sequences.items():
                         row = df.loc[idx]
                         f.write(f">{row.gene_id}|{row.feature}|{row.Chromosome}:{row.Start}-{row.End}|{row.Strand}\n{''.join(seq_list)}\n")
 
                 logging.info("Running FlashFry on SNP-modified sequences...")
-                run_command(f"java -Xmx{self.args.mem} -jar {self.ff_jar} discover --database {self.db} --fasta {snp_fasta} --positionOutput --output targets_snp.output",
+                run_command(f"java -Xmx{self.args.mem} -jar {self.ff_jar} discover --database {self.db} --fasta {snp_fasta} --positionOutput --output {os.path.join(self.outdir, 'targets_snp.output')}",
                             verbose=getattr(self.args, 'verbose', False))
-                run_command(f"java -Xmx{self.args.mem} -jar {self.ff_jar} score --input targets_snp.output --output targets_snp.output.scored --database {self.db} --scoringMetrics={self.args.metrics}",
+                run_command(f"java -Xmx{self.args.mem} -jar {self.ff_jar} score --input {os.path.join(self.outdir, 'targets_snp.output')} --output {os.path.join(self.outdir, 'targets_snp.output.scored')} --database {self.db} --scoringMetrics={self.args.metrics}",
                             verbose=getattr(self.args, 'verbose', False))
 
-                snp_df = pd.read_csv("targets_snp.output.scored", sep='\t')
+                snp_df = pd.read_csv(os.path.join(self.outdir, "targets_snp.output.scored"), sep='\t')
                 snp_seq_col = None
                 for col in snp_df.columns:
                     first_val = snp_df[col].dropna().iloc[0] if not snp_df[col].dropna().empty else None
@@ -388,9 +451,8 @@ class CrispyPipeline:
                                   and c not in ['chrom', 'start', 'end', 'stop',
                                                 'strand', 'contig']]
                     rename_map = {c: f'{c}_snp' for c in score_cols}
-                    # Merge on contig + target (unique per guide, not contig alone)
-                    snp_to_merge = snp_df_filtered[['contig', 'target'] + score_cols].rename(columns=rename_map)
-                    df = df.merge(snp_to_merge, on=['contig', 'target'], how='left')
+                    snp_to_merge = snp_df_filtered[['contig'] + score_cols].rename(columns=rename_map)
+                    df = df.merge(snp_to_merge, on='contig', how='left')
                     logging.info("Re-scored %d / %d guides that directly overlap SNPs",
                                  len(snp_df_filtered), len(snp_df))
                     # Clear _snp scores for guides that don't overlap any SNPs
@@ -422,13 +484,18 @@ class CrispyPipeline:
         df = df.drop_duplicates(subset=['gene_id', 'target', 'context'])
         logging.info(f"Deduplication complete. Unique guides: {len(df)}")
 
-        # 4. Final Ranking
-        df['over_cutoff'] = df['Doench2014OnTarget'] > self.args.cutoff
+        # 4. Final Ranking (using Doench 2016, aligned with CRISPOR)
+        df['over_cutoff'] = df['Doench2016OnTarget'] > self.args.cutoff
 
         # Determine sorting priority
-        # Base priority: Cutoff (Desc) -> Doench Score (Desc)
-        sort_cols = ['over_cutoff', 'Doench2014OnTarget']
+        # Base priority: Cutoff (Desc) -> Doench 2016 Score (Desc)
+        sort_cols = ['over_cutoff', 'Doench2016OnTarget']
         asc_vals = [False, False]
+
+        # If RS3 is available, add as secondary sort
+        if 'RuleSet3' in df.columns:
+            sort_cols.append('RuleSet3')
+            asc_vals.append(False)
 
         if self.args.accessome and os.path.exists(self.args.accessome):
             # Priority: Accessibility (Desc)
@@ -455,8 +522,8 @@ class CrispyPipeline:
             cols.insert(0, 'gene_id')
             final = final[cols]
 
-        final.to_csv("final_sgrnas.tsv", sep='\t', index=False)
-        logging.info("Done. Results saved to final_sgrnas.tsv")
+        final.to_csv(os.path.join(self.outdir, "final_sgrnas.tsv"), sep='\t', index=False)
+        logging.info("Done. Results saved to %s", os.path.join(self.outdir, "final_sgrnas.tsv"))
 
         # Genome browser BED output
         if getattr(self.args, 'browser_bed', False):
@@ -470,7 +537,7 @@ class CrispyPipeline:
           orange = passes cutoff, has SNPs
           red    = fails cutoff
         """
-        bed_path = "final_sgrnas.bed"
+        bed_path = os.path.join(self.outdir, "final_sgrnas.bed")
         # Sort by chromosome then absolute position (numeric)
         bed_df = df.copy()
         bed_df['abs_start'] = bed_df['Start'].astype(int) + bed_df['start'].astype(int)
@@ -487,8 +554,14 @@ class CrispyPipeline:
                 gene = row.get('gene_id', '.')
                 seq = row.get('target', '.')
                 n_snps = int(row.get('num_snps', 0))
-                score_raw = row.get('Doench2014OnTarget', 0)
-                score_val = int(score_raw * 1000) if pd.notna(score_raw) else 0
+                score_raw = row.get('RuleSet3', row.get('Doench2016OnTarget', 0))
+                if pd.notna(score_raw):
+                    if 'RuleSet3' in df.columns:
+                        score_val = int(score_raw * 100)
+                    else:
+                        score_val = int(score_raw * 1000)
+                else:
+                    score_val = 0
                 over = row.get('over_cutoff', False)
 
                 if not over:
@@ -553,13 +626,21 @@ if __name__ == "__main__":
     parser.add_argument("--mem", type=str, default=config.get('mem', "8g"), help="Memory limit for FlashFry (e.g., 4g, 8g, 16g)")
     parser.add_argument("--metrics", type=str, default=config.get('metrics', "doench2014ontarget"), help="FlashFry scoring metrics, comma-separated (default: doench2014ontarget)")
     parser.add_argument("--rescore-snps", action="store_true", help="Re-run FlashFry scoring with SNPs incorporated into target sequences")
+    parser.add_argument("--rs3", action="store_true",
+                        help="Compute Rule Set 3 scores (requires sglearn and lightgbm)")
     parser.add_argument("--browser-bed", action="store_true",
                         help="Output a BED file for genome browser visualization")
+    parser.add_argument("--outdir", type=str, default="./output",
+                        help="Output directory (default: ./output)")
+    parser.add_argument("--flashfry-jar", type=str,
+                        default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "FlashFry-assembly-1.15.jar"),
+                        help="Path to FlashFry JAR (default: crispy/FlashFry-assembly-1.15.jar)")
     parser.add_argument("--verbose", action="store_true", help="Show FlashFry Java output")
 
     args = parser.parse_args()
 
-    setup_logging()
+    os.makedirs(args.outdir, exist_ok=True)
+    setup_logging(log_name=os.path.join(args.outdir, "crispy.log"))
     pipeline = CrispyPipeline(args)
     # bed_file = pipeline.prepare_targets()
     targets = pipeline.prepare_targets()

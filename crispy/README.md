@@ -59,12 +59,20 @@ pip install -r crispy/requirements.txt
 ```
 
 ### 3. Acquiring FlashFry
-The pipeline requires the FlashFry assembly JAR to be present in the project root directory. Use the following command to download the specific version required by this pipeline:
+The pipeline requires the FlashFry assembly JAR. Download it from the [FlashFry releases page](https://github.com/mckennalab/FlashFry/releases):
 
 ```bash
-wget https://github.com/mckennalab/FlashFry/releases/download/1.15/FlashFry-assembly-1.15.jar
+# Option A: Download to crispy/ directory (default location)
+wget -P crispy/ https://github.com/mckennalab/FlashFry/releases/download/1.15/FlashFry-assembly-1.15.jar
+
+# Option B: Download to a custom location
+wget -P /path/to/tools/ https://github.com/mckennalab/FlashFry/releases/download/1.15/FlashFry-assembly-1.15.jar
 ```
-*Note: The file must be named exactly `FlashFry-assembly-1.15.jar` and located in the root directory for the pipeline to execute correctly.*
+
+By default, the pipeline looks for `FlashFry-assembly-1.15.jar` in the `crispy/` directory. Override with `--flashfry-jar`:
+```bash
+python3 crispy/pipeline.py --flashfry-jar /path/to/FlashFry-assembly-1.15.jar ...
+```
 
 ### Configuration and Execution
 
@@ -184,6 +192,53 @@ With `--browser-bed`, a BED file is generated for IGV/UCSC:
 
 Load in IGV: **File → Load from File → final_sgrnas.bed**
 
+### On-Target Scoring
+
+The pipeline computes two on-target efficiency scores: **Doench 2016 (Rule Set 2)** and **Rule Set 3**.
+
+#### Rule Set 2 -- Doench 2016 (`doench2016.py`)
+
+Pure numpy GradientBoostingRegressor (100 trees, lr=0.1, max_depth=3) using 627 features extracted from each 30mer context sequence. No sklearn dependency -- prediction is pure numpy tree traversal.
+
+| Column | Scale | Description |
+|--------|-------|-------------|
+| `Doench2016OnTarget` | 0 to 1 | On-target efficiency score (higher = better) |
+
+The model (`doench2016_model.json`) was extracted from the azimuth package bundled with CRISPOR. Scores may differ from the CRISPOR website by ~10 points on average, as the production server appears to use a different model than what is distributed in the repository.
+
+#### Rule Set 3 (`rs3score.py`)
+
+LightGBM model (2,279 trees) from the [GPP/rs3](https://github.com/gpp-rnd/rs3) package, using `sglearn` for feature extraction. Requires `sglearn` and `lightgbm` (see requirements.txt). Uses tracrRNA identity features (Hsu2013 default).
+
+| Column | Scale | Description |
+|--------|-------|-------------|
+| `RuleSet3` | unbounded | On-target efficiency score (higher = better) |
+
+Enable with `--rs3` flag. Spearman correlation with Doench 2016: ~0.72.
+
+#### Setup for RS3
+
+One-time model conversion (requires `rs3test` environment):
+
+```bash
+conda create -n rs3test python=3.10 scikit-learn==1.0.2 lightgbm joblib -c conda-forge -y
+conda activate rs3test
+cd crispy
+python convert_rs3_model.py --rs3-dir ~/projects/src/rs3
+```
+
+#### Output columns
+
+| Column | Description |
+|--------|-------------|
+| `Doench2014OnTarget` | On-target score from FlashFry (Rule Set 1, deprecated) |
+| `Doench2016OnTarget` | On-target score from Doench 2016 (Rule Set 2) |
+| `RuleSet3` | On-target score from Rule Set 3 (requires `--rs3`) |
+
+Ranking uses: cutoff -> Doench 2016 -> Rule Set 3 -> accessibility -> entropy.
+
+The `Doench2016OnTarget` column is used for cutoff filtering (`over_cutoff`).
+
 ### Running with SNP Input
 
 To use SNP data, first run the liftover pipeline (`lift_snps.py`) to convert SNP positions to your reference coordinates, then pass the resulting BED file to Crispy:
@@ -194,17 +249,19 @@ python3 idmapping/lift_snps.py \
     --old-genome data/old_assembly.fa \
     --new-genome data/new_assembly.fa \
     --vcf data/snps.vcf.gz \
-    --output data/snps_lifted.vcf.gz \
+    --output output/liftover \
     --bed \
     --threads 8 \
     --preset asm10
 
-# Step 2: Run Crispy with lifted SNPs
-python crispy/pipeline.py \
+# Step 2: Run Crispy with lifted SNPs and RS3 scoring
+python3 crispy/pipeline.py \
     --gff data/genome_annotation.gff3 \
     --ref data/new_assembly.fa \
-    --snps data/snps_lifted.vcf.bed \
+    --snps output/liftover/snps_lifted.bed \
     --genes data/target_genes.csv \
+    --outdir output/sgRNAs \
     --rescore-snps \
-    --browser-bed
+    --browser-bed \
+    --rs3
 ```

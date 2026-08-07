@@ -3,3 +3,5 @@ pandas
 biopython
 pyfaidx
 PyYAML
+sglearn>=1.2.5
+lightgbm>=3.0.0
