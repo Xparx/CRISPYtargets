@@ -1,26 +1,19 @@
 import argparse
-import subprocess
 import os
 import sys
 import numpy as np
 import pandas as pd
 import pyranges as pr
 import logging
-import yaml
 from pyfaidx import Fasta
-from utils import calculate_entropy, design_oligos, parse_flashfry_contig
-from utils import complement_iupac, snp_to_iupac
-from doench2016 import score_guides
+from .discovery import discover_and_score, extract_sequences, rescore_with_snps
+from ..common.config import load_config
+from ..common.exec import run_command
+from ..common.logging import setup_logging
+from .utils import calculate_entropy, design_oligos, parse_flashfry_contig
+from .utils import complement_iupac, snp_to_iupac
+from .doench2016 import score_guides
 import gc
-
-
-def run_command(cmd, verbose=False):
-    logging.info(f"Executing: {cmd}")
-    if verbose:
-        subprocess.run(cmd, shell=True, check=True)
-    else:
-        subprocess.run(cmd, shell=True, check=True,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 class CrispyPipeline:
@@ -29,6 +22,8 @@ class CrispyPipeline:
         self.outdir = args.outdir
         self.ff_jar = args.flashfry_jar
         self.db = os.path.join(args.outdir, "htky_db")
+        # Built lazily by extract_sequences; used by post_process for gene_id.
+        self.gene_map = {}
 
     def prepare_targets(self):
         logging.info("Preparing target regions...")
@@ -52,26 +47,40 @@ class CrispyPipeline:
         tpts = gr[gr.df.Feature.isin(tss_features)]
         # tpts = gr[gr.feature == 'transcript']
 
-        # Positive strand: TSS is start.
-        pos_tpts = tpts[tpts.df['Strand'] == '+']
-        pos_df = pos_tpts.df.copy()
-        pos_df['Feature'] = 'promoter' # Explicitly label as promoter
-        tss_pos = pos_df['Start']
-        pos_df['Start'] = tss_pos - upstream
-        pos_df['End'] = tss_pos + downstream
-        pos_promoters = pr.PyRanges(pos_df)
+        # A GFF3 slice with no matching features yields an empty PyRanges,
+        # whose .df has no columns at all; indexing Strand/Start/End on it
+        # raises KeyError. Guard every access to a strand-filtered slice.
+        promoter_dfs = []
+        if len(tpts) > 0:
+            # Positive strand: TSS is start.
+            pos_tpts = tpts[tpts.df['Strand'] == '+']
+            if len(pos_tpts) > 0:
+                pos_df = pos_tpts.df.copy()
+                pos_df['Feature'] = 'promoter' # Explicitly label as promoter
+                tss_pos = pos_df['Start']
+                pos_df['Start'] = tss_pos - upstream
+                pos_df['End'] = tss_pos + downstream
+                promoter_dfs.append(pos_df)
 
-        # Negative strand: TSS is end.
-        neg_tpts = tpts[tpts.df['Strand'] == '-']
-        neg_df = neg_tpts.df.copy()
-        neg_df['Feature'] = 'promoter' # Explicitly label as promoter
-        tss_neg = neg_df['End']
-        neg_df['Start'] = tss_neg - downstream
-        neg_df['End'] = tss_neg + upstream
-        neg_promoters = pr.PyRanges(neg_df)
+            # Negative strand: TSS is end.
+            neg_tpts = tpts[tpts.df['Strand'] == '-']
+            if len(neg_tpts) > 0:
+                neg_df = neg_tpts.df.copy()
+                neg_df['Feature'] = 'promoter' # Explicitly label as promoter
+                tss_neg = neg_df['End']
+                neg_df['Start'] = tss_neg - downstream
+                neg_df['End'] = tss_neg + upstream
+                promoter_dfs.append(neg_df)
 
-        # Combine positive and negative promoters by concatenating their DataFrames
-        promoters_df = pd.concat([pos_promoters.df, neg_promoters.df])
+        if promoter_dfs:
+            promoters_df = pd.concat(promoter_dfs)
+        else:
+            logging.warning(
+                "No TSS features matched %s on either strand; promoter targets skipped. "
+                "Check --tss-features against your GFF3's feature labels.",
+                tss_features,
+            )
+            promoters_df = pd.DataFrame(columns=exons.df.columns)
         promoters = pr.PyRanges(promoters_df)
 
         # Combine exons and promoters by concatenating their DataFrames
@@ -172,49 +181,13 @@ class CrispyPipeline:
         return targets
 
     def extract_sequences(self, targets_gr):
-        logging.info("Extracting sequences for FlashFry...")
-        fasta_out = os.path.join(self.outdir, "targets.fasta")
-        genome = Fasta(self.args.ref)
-
-        with open(fasta_out, 'w') as f_out:
-            for row in targets_gr.df.itertuples():
-                # 1. Identify the feature's own ID or its immediate parent
-                fid = getattr(row, 'ID', None)
-                if fid is None or str(fid) == 'nan':
-                    fid = getattr(row, 'Parent', None)
-                
-                # 2. Use the gene_map to resolve this ID to the top-level Gene ID
-                gene_id = self.gene_map.get(str(fid), "unknown")
-
-                seq = genome[row.Chromosome][row.Start:row.End].seq
-                # Include row.Feature in the header to track origin (CDS, exon, promoter)
-                f_out.write(f">{gene_id}|{row.Feature}|{row.Chromosome}:{row.Start}-{row.End}|{row.Strand}\n{seq}\n")
-
-        return fasta_out
+        return extract_sequences(targets_gr, self.outdir, self.args.ref,
+                                 self.gene_map)
 
     def run_flashfry(self, targets_gr):
-        logging.info("Running FlashFry...")
-        # Index if DB doesn't exist
-        if not os.path.exists(self.db):
-            # Create a temporary directory for FlashFry indexing
-            os.makedirs(os.path.join(self.outdir, "build"), exist_ok=True)
-            run_command(f"java -Xmx4g -jar {self.ff_jar} index --database {self.db} --reference {self.args.ref} --enzyme spcas9ngg --tmpLocation {os.path.join(self.outdir, 'build')}",
-                        verbose=True)
-        else:
-            logging.info("FlashFry database already exists: %s", self.db)
-
-        # Extract sequences from PyRanges to FASTA
-        targets_fasta = self.extract_sequences(targets_gr)
-
-        # Discover
-        run_command(f"java -Xmx{self.args.mem} -jar {self.ff_jar} discover --database {self.db} --fasta {targets_fasta} --positionOutput --output {os.path.join(self.outdir, 'targets.output')}",
-                    verbose=getattr(self.args, 'verbose', False))
-
-        # Score
-        run_command(f"java -Xmx{self.args.mem} -jar {self.ff_jar} score --input {os.path.join(self.outdir, 'targets.output')} --output {os.path.join(self.outdir, 'targets.output.scored')} --database {self.db} --scoringMetrics={self.args.metrics}",
-                    verbose=getattr(self.args, 'verbose', False))
-
-        return os.path.join(self.outdir, "targets.output.scored")
+        return discover_and_score(self.ff_jar, self.db, self.args.ref,
+                                  self.outdir, targets_gr, self.args,
+                                  self.gene_map)
 
     def post_process(self, scored_file):
         logging.info("Post-processing and scoring...")
@@ -277,10 +250,14 @@ class CrispyPipeline:
 
         def get_flank(chrom, guide_start, strand):
             if strand == '-':
-                # Reverse strand: upstream on reverse = AFTER guide on forward
-                left_start = guide_start + self.args.target_len
+                # On the - strand the 23-mer at fwd[guide_start, guide_start+23)
+                # is read as the reverse complement, so the PAM sits at the
+                # LOW-coordinate end: PAM is fwd[g, g+3) and the protospacer is
+                # fwd[g+3, g+23). The guide-orientation 5' flank is therefore the
+                # 5 bases AFTER the protospacer on the forward strand.
+                left_start = guide_start + self.args.target_len + self.args.pam_len
                 left = str(genome[chrom][left_start:left_start + 5].seq) if left_start + 5 <= len(genome[chrom]) else None
-                # Downstream on reverse = BEFORE guide on forward
+                # 3' flank is BEFORE the PAM on the forward strand.
                 right_end = guide_start
                 right = str(genome[chrom][right_end - 2:right_end].seq) if right_end >= 2 else None
                 return (revcomp(left) if left else None,
@@ -302,7 +279,7 @@ class CrispyPipeline:
         # Rule Set 3 scoring (optional)
         if getattr(self.args, 'rs3', False):
             try:
-                from rs3score import score_guides as rs3_score_guides
+                from .rs3score import score_guides as rs3_score_guides
                 # rs3 needs 30mers: 5bp flank + 20bp guide + 3bp PAM + 2bp flank
                 rs3_seqs = []
                 for i in range(len(df)):
@@ -428,12 +405,9 @@ class CrispyPipeline:
                         f.write(f">{row.gene_id}|{row.feature}|{row.Chromosome}:{row.Start}-{row.End}|{row.Strand}\n{''.join(seq_list)}\n")
 
                 logging.info("Running FlashFry on SNP-modified sequences...")
-                run_command(f"java -Xmx{self.args.mem} -jar {self.ff_jar} discover --database {self.db} --fasta {snp_fasta} --positionOutput --output {os.path.join(self.outdir, 'targets_snp.output')}",
-                            verbose=getattr(self.args, 'verbose', False))
-                run_command(f"java -Xmx{self.args.mem} -jar {self.ff_jar} score --input {os.path.join(self.outdir, 'targets_snp.output')} --output {os.path.join(self.outdir, 'targets_snp.output.scored')} --database {self.db} --scoringMetrics={self.args.metrics}",
-                            verbose=getattr(self.args, 'verbose', False))
-
-                snp_df = pd.read_csv(os.path.join(self.outdir, "targets_snp.output.scored"), sep='\t')
+                snp_scored = rescore_with_snps(
+                    self.ff_jar, self.db, self.outdir, self.args, snp_fasta)
+                snp_df = pd.read_csv(snp_scored, sep='\t')
                 snp_seq_col = None
                 for col in snp_df.columns:
                     first_val = snp_df[col].dropna().iloc[0] if not snp_df[col].dropna().empty else None
@@ -577,31 +551,25 @@ class CrispyPipeline:
         logging.info("Genome browser BED written to %s", bed_path)
 
 
-def setup_logging(log_name="crispy.log"):
-    logger = logging.getLogger()
-    logger.setLevel(logging.DEBUG)
-    
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
-    
-    file_handler = logging.FileHandler(log_name)
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-    
-    logger.addHandler(console_handler)
-    logger.addHandler(file_handler)
+def resolve_flashfry_jar(explicit):
+    """Resolve the FlashFry JAR: --flashfry-jar, then $CRISPY_FLASHFRY_JAR.
 
-def load_config(config_path):
-    try:
-        with open(config_path, 'r') as f:
-            return yaml.safe_load(f) or {}
-    except Exception as e:
-        # We use print here because logging isn't set up yet
-        print(f"ERROR: Failed to load config file {config_path}: {e}")
-        return {}
+    The JAR is an untracked external binary and is not shipped inside the
+    package, so there is no file-relative default to fall back on.
+    """
+    if explicit:
+        return explicit
+    env_jar = os.environ.get("CRISPY_FLASHFRY_JAR")
+    if env_jar:
+        return env_jar
+    sys.exit(
+        "ERROR: FlashFry JAR not specified. Pass --flashfry-jar or set the "
+        "CRISPY_FLASHFRY_JAR environment variable. Download it from "
+        "https://github.com/mckennalab/FlashFry/releases"
+    )
 
-if __name__ == "__main__":
+def main():
+    """CLI entry point: parse args, build the pipeline, and run it."""
     # Pre-parse to check for config file
     pre_parser = argparse.ArgumentParser(add_help=False)
     pre_parser.add_argument("--config", type=str, help="Path to YAML config file")
@@ -632,20 +600,24 @@ if __name__ == "__main__":
                         help="Output a BED file for genome browser visualization")
     parser.add_argument("--outdir", type=str, default="./output",
                         help="Output directory (default: ./output)")
-    parser.add_argument("--flashfry-jar", type=str,
-                        default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "FlashFry-assembly-1.15.jar"),
-                        help="Path to FlashFry JAR (default: crispy/FlashFry-assembly-1.15.jar)")
+    parser.add_argument("--flashfry-jar", type=str, default=None,
+                        help="Path to FlashFry JAR (default: $CRISPY_FLASHFRY_JAR)")
     parser.add_argument("--verbose", action="store_true", help="Show FlashFry Java output")
 
     args = parser.parse_args()
+    args.flashfry_jar = resolve_flashfry_jar(args.flashfry_jar)
 
     os.makedirs(args.outdir, exist_ok=True)
-    setup_logging(log_name=os.path.join(args.outdir, "crispy.log"))
+    # Per-run log lives in the outdir alongside the other outputs.
+    setup_logging(log_name=os.path.join(args.outdir, "design.log"))
     pipeline = CrispyPipeline(args)
-    # bed_file = pipeline.prepare_targets()
     targets = pipeline.prepare_targets()
     if targets is None or len(targets) == 0:
         logging.error("No target regions were found in the GFF. Check your feature labels (exon, CDS, mRNA, transcript).")
-        exit(1)
+        sys.exit(1)
     scored_file = pipeline.run_flashfry(targets)
     pipeline.post_process(scored_file)
+
+
+if __name__ == "__main__":
+    main()

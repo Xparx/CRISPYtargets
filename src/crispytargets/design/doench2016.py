@@ -18,7 +18,7 @@ import numpy as np
 import itertools
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.join(_DIR, "doench2016_model.json")
+MODEL_PATH = os.path.join(_DIR, "data", "doench2016_model.json")
 RAW_ALPHABET = ['A', 'T', 'C', 'G']
 
 # ── feature extraction ───────────────────────────────────────────────────────

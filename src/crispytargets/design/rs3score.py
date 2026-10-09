@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.join(_DIR, "RuleSet3.json")
+MODEL_PATH = os.path.join(_DIR, "data", "RuleSet3.json")
 
 _model = None
 

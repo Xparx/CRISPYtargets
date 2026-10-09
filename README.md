@@ -2,73 +2,93 @@
 
 CRISPR guide RNA design pipeline for non-model organisms, with genomic ID mapping tools.
 
-## What's in this repo
+Two largely independent capabilities, packaged together because both exist to
+support work in organisms without established tooling:
 
-| Directory | Purpose |
-|-----------|---------|
-| `crispy/` | sgRNA discovery, scoring, and oligo design |
-| `idmapping/` | SNP liftover between genome assemblies + ortholog mapping |
+- **Design**: discover, score, and rank sgRNAs from a GFF3 + FASTA pair
+- **Mapping**: lift SNP positions between assemblies, and map gene IDs to
+  orthologs in a well-annotated reference
 
-## Requirements
+## Installation
 
 ```bash
-conda create -n crispy python=3.10 pandas pyranges biopython pyfaidx pyyaml pysam minimap2 bcftools tabix numpy -c conda-forge -c bioconda
+conda create -n crispy python=3.10 minimap2 bcftools tabix -c conda-forge -c bioconda
 conda activate crispy
-pip install -r crispy/requirements.txt
+pip install -e .            # core: design + mapping
+pip install -e ".[rs3]"     # optional Rule Set 3 scoring (--rs3)
+pip install -e ".[test]"    # the pytest suite
 ```
 
-FlashFry (already in `crispy/`):
+Python dependencies are declared in `pyproject.toml`. Three external tools are
+required at runtime and are not installed by pip:
+
+| Tool | Used by | Install |
+|------|---------|---------|
+| Java (JRE) | FlashFry, used by `design` | system package |
+| FlashFry JAR | `design` | [releases](https://github.com/mckennalab/FlashFry/releases) |
+| minimap2, tabix | `lift` | conda (above) |
+| BLAST+ (`makeblastdb`, `blastp`) | `map` | `conda install -c bioconda blast` |
+
+The FlashFry JAR is an untracked binary and is **not** shipped inside the
+package. Tell the pipeline where it is with either:
+
 ```bash
-ls crispy/FlashFry-assembly-1.15.jar   # should exist
+export CRISPY_FLASHFRY_JAR=/path/to/FlashFry-assembly-1.15.jar
+# or pass --flashfry-jar /path/to/FlashFry-assembly-1.15.jar per run
 ```
 
-## Quick Start
+## Repository layout
 
-### Workflow 1: Design sgRNAs (Crispy)
+```
+src/crispytargets/
+    design/     sgRNA discovery and scoring (FlashFry, Doench 2016 RS2/RS3)
+    mapping/    SNP liftover and BLAST ortholog mapping
+    cli/        the `crispytargets` subcommand dispatcher
+tests/          pytest suite
+tools/          developer-only scripts (model conversion, training)
+examples/       run_crispy.sh workflow template
+docs/           detailed per-capability documentation
+```
 
-Find and rank CRISPR guides for your target genes.
+## Command line
+
+One command with a subcommand per capability:
+
+```
+crispytargets design         find and score sgRNAs
+crispytargets map            build an ortholog table from BLAST results
+crispytargets lift           lift SNP positions between assemblies
+crispytargets clean-mapping  collapse isoform IDs to locus IDs
+```
+
+Every subcommand can also be run without installing, as
+`python -m crispytargets <command> ...`.
+
+### Workflow 1: Design sgRNAs
 
 ```bash
-python3 crispy/pipeline.py \
+crispytargets design \
     --gff /path/to/genome.gff3 \
     --ref /path/to/genome.fa \
     --outdir output/sgRNAs
 ```
 
-**With a gene list:**
+With a gene list, SNPs, and browser output:
+
 ```bash
-python3 crispy/pipeline.py \
+crispytargets design \
     --gff /path/to/genome.gff3 \
     --ref /path/to/genome.fa \
     --genes /path/to/genes.csv \
-    --outdir output/sgRNAs
-```
-
-**With SNPs and browser output:**
-```bash
-python3 crispy/pipeline.py \
-    --gff /path/to/genome.gff3 \
-    --ref /path/to/genome.fa \
     --snps /path/to/lifted_snps.bed \
     --outdir output/sgRNAs \
     --rescore-snps --browser-bed
 ```
 
-**With chromatin accessibility:**
-```bash
-python3 crispy/pipeline.py \
-    --gff /path/to/genome.gff3 \
-    --ref /path/to/genome.fa \
-    --accessome /path/to/open_chromatin.bed \
-    --outdir output/sgRNAs
-```
-
 ### Workflow 2: Lift SNPs between assemblies
 
-Map SNP positions from one genome assembly to another.
-
 ```bash
-python3 idmapping/lift_snps.py \
+crispytargets lift \
     --old-genome /path/to/old_assembly.fa \
     --new-genome /path/to/new_assembly.fa \
     --vcf /path/to/snps.vcf.gz \
@@ -76,48 +96,37 @@ python3 idmapping/lift_snps.py \
     --bed --preset asm10
 ```
 
-### Workflow 3: Map orthologs between species
-
-Find human/mouse orthologs via BLAST.
+### Workflow 3: Map orthologs
 
 ```bash
-# Create BLAST databases (one-time)
-makeblastdb -in /path/to/human_proteome.fasta -dbtype prot -out output/human_db
-makeblastdb -in /path/to/mouse_proteome.fasta -dbtype prot -out output/mouse_db
+# One-time: build BLAST databases
+makeblastdb -in human_proteome.fasta -dbtype prot -out output/human_db
 
-# Run BLAST (outfmt 6 is required)
-blastp -query /path/to/your_proteins.fasta -db output/human_db \
+# Search (outfmt 6 is required)
+blastp -query your_proteins.fasta -db output/human_db \
     -out output/human_results.tsv -outfmt 6 -evalue 1e-5
-blastp -query /path/to/your_proteins.fasta -db output/mouse_db \
-    -out output/mouse_results.tsv -outfmt 6 -evalue 1e-5
 
-# Map orthologs (add species one at a time)
-python3 idmapping/run_mapping.py \
+# Map one species at a time into a master table
+crispytargets map \
     --gff /path/to/genome.gff3 \
     --blast-file output/human_results.tsv \
     --species Human \
-    --output output/orthologs
-
-python3 idmapping/run_mapping.py \
-    --gff /path/to/genome.gff3 \
-    --blast-file output/mouse_results.tsv \
-    --species Mouse \
-    --output output/orthologs
+    --output output/orthologs.tsv
 ```
 
-## Full pipeline example
+### Full pipeline example
 
 ```bash
-# 1. Lift SNPs
-python3 idmapping/lift_snps.py \
+# 1. Lift SNPs onto the assembly you will design against
+crispytargets lift \
     --old-genome /path/to/old_assembly.fa \
     --new-genome /path/to/new_assembly.fa \
     --vcf /path/to/snps.vcf.gz \
     --output output/liftover \
     --bed --preset asm10
 
-# 2. Design sgRNAs with SNP awareness
-python3 crispy/pipeline.py \
+# 2. Design guides with SNP awareness
+crispytargets design \
     --gff /path/to/genome.gff3 \
     --ref /path/to/new_assembly.fa \
     --snps output/liftover/*_lifted.bed \
@@ -125,58 +134,27 @@ python3 crispy/pipeline.py \
     --rescore-snps --browser-bed
 ```
 
-## All CLI arguments
+## Detailed documentation
 
-<details>
-<summary>crispy/pipeline.py</summary>
+- [docs/design.md](docs/design.md) — target preparation, promoter windows,
+  accessibility vs. hard filtering, output files and columns, Doench 2016
+  Rule Set 2 and Rule Set 3 scoring details
+- [docs/mapping.md](docs/mapping.md) — BLAST ortholog mapping and its
+  incremental backbone, SNP liftover internals, preset selection, SNP source
+  and preprocessing for *Ciona robusta*
 
-| Argument | Default | Description |
-|----------|---------|-------------|
-| `--gff` | — | Reference GFF3 |
-| `--ref` | — | Reference FASTA |
-| `--outdir` | `./output` | Output directory |
-| `--genes` | — | Gene list CSV (`Gene.ID` column) |
-| `--snps` | — | SNP BED file |
-| `--accessome` | — | Accessible regions BED |
-| `--filter-bed` | — | Hard region filter BED |
-| `--cutoff` | 0.65 | Doench 2016 score cutoff |
-| `--metrics` | doench2014ontarget | FlashFry scoring metrics |
-| `--rescore-snps` | off | Re-score with SNP variants |
-| `--browser-bed` | off | Output genome browser BED |
-| `--verbose` | off | Show FlashFry output |
+## Testing
 
-</details>
+```bash
+pip install -e ".[test]"
+python -m pytest tests/
+```
 
-<details>
-<summary>idmapping/lift_snps.py</summary>
-
-| Argument | Default | Description |
-|----------|---------|-------------|
-| `--old-genome` | — | Old assembly (FASTA or .2bit) |
-| `--new-genome` | — | New assembly FASTA |
-| `--vcf` | — | Input VCF |
-| `--output` | — | Output directory |
-| `--bed` | off | Also output BED |
-| `--preset` | asm5 | minimap2 preset |
-| `--threads` | 8 | Threads |
-| `--keep-intermediates` | off | Keep PAF file |
-| `-v, --verbose` | off | Debug logging |
-
-</details>
-
-<details>
-<summary>idmapping/run_mapping.py</summary>
-
-| Argument | Default | Description |
-|----------|---------|-------------|
-| `--gff` | — | Source organism GFF3 |
-| `--blast-file` | — | BLAST results TSV (outfmt 6) |
-| `--species` | — | Species label |
-| `--output` | — | Output directory |
-| `--evalue` | 1e-50 | E-value threshold |
-| `--include-top` | off | Keep top hit even if above threshold |
-
-</details>
+The smoke and liftover tests skip themselves when java/FlashFry or minimap2
+are absent. Golden Doench 2016 scores live in
+`tests/fixtures/doench2016_scores.tsv` and should only be regenerated when a
+scoring change is intentional
+(`python tests/fixtures/regenerate_doench2016_scores.py`).
 
 ## Citations
 
@@ -189,8 +167,3 @@ This pipeline uses software and models from the following sources:
 - **LightGBM** — Gradient boosting framework used for Rule Set 3 inference.
 - **CRISPOR** — Haeussler et al. *Nucleic Acids Research*, 2018. [doi:10.1093/nar/gky406](https://doi.org/10.1093/nar/gky406). Model files sourced from the [crisporWebsite](https://github.com/maximilianh/crisporWebsite) repository.
 - **BioPython** — Cock et al. *Bioinformatics*, 2009. [doi:10.1093/bioinformatics/btp163](https://doi.org/10.1093/bioinformatics/btp163). Used for melting temperature calculations (Tm_NN).
-
-## Detailed documentation
-
-- [crispy/README.md](crispy/README.md) — full Crispy documentation, scoring details, Doench 2016 model extraction
-- [idmapping/README.md](idmapping/README.md) — liftover pipeline, SNP source, ortholog mapping details

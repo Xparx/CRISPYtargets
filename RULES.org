@@ -1,0 +1,237 @@
+#+TITLE: Rules: CRISPYtargets
+
+* Python Coding Standards
+
+These rules apply to all Python code produced in the project.
+
+** No Nested Definitions
+
+Classes and functions must be defined at the module level. Local
+definitions (functions or classes inside other functions/classes)
+are forbidden unless they are strictly required for a closure or
+a specific decorator pattern.
+
+** Import Discipline
+
+- *Global Imports*: Preferred for all standard dependencies.
+- *Local Imports*: Permitted only to avoid circular dependencies
+  or to optimize startup time for heavy libraries. Local imports
+  MUST be placed at the very top of the function, immediately
+  following the docstring.
+- *No Interlaced Imports*: Imports must never appear in the
+  middle of a logic block.
+
+** Local Function Ordering
+
+If a local function is absolutely necessary, it must be defined
+after local imports and before the main execution logic of the
+parent function.
+
+** Explicit State
+
+Avoid using closures to maintain state (e.g., defining a list
+outside a local class to capture metrics). Use explicit class
+attributes or return values.
+
+** AI Coding Discipline
+
+- *Read Before Write*: Request and read full file contents before
+  changing anything. Trace data flow end-to-end. Never guess at
+  file contents or assume variable types from context.
+- *Minimal Change*: Ask "What is the smallest edit that solves
+  this problem?" Do not add features, refactor, or optimize
+  unless explicitly asked.
+- *Match Conventions*: Study how the codebase already handles
+  a pattern before introducing a new one. If the pipeline scores
+  a metric internally, do not add a parallel implementation.
+- *Reuse Before Rewrite*: When existing machinery already
+  supports the required behavior, the fix is configuration or
+  contract restoration, not a new code path. A parameter being
+  ignored is a bug in its contract to fix, never grounds to
+  bypass the parameter.
+- *Prefer removing bloat over adding flags*: Before proposing a
+  new mode or option, check whether an existing one covers it.
+  A retired experiment does not become a production flag.
+- *No Dead or Redundant Code*: Every line must serve a purpose.
+  No padding comments, no obvious comments, no stub functions.
+- *Audit All Call Sites*: When fixing a bug or changing a
+  pattern, check every file that uses the same pattern. Do not
+  fix one instance and leave identical bugs elsewhere.
+- *Propose Reasoning Before Code*: State what needs to change
+  and why. Confirm the approach before writing any diff.
+- *Correctness Over Completeness*: A correct minimal solution
+  beats an incomplete ambitious one.
+
+** Data Integrity
+
+- *Data Flow Integrity*: When working with data passing through
+  multiple steps (load, transform, compute, save), verify at each
+  boundary that the expected format is maintained. Never save
+  computed/normalized data into a field that should hold raw data.
+  Verify that no redundant transformations are introduced at any
+  stage.
+- *Data Cost Minimization*: Do not densify sparse data at any
+  point unless it is absolutely required.
+
+* Data Format Rules
+
+These rules govern file formats used when saving tabular data.
+
+** TSV Over CSV
+
+Data table files must be saved in TSV (tab-separated values)
+format rather than CSV (comma-separated values) in all areas
+where TSV does not interfere with other functionality. Tabs
+rarely occur inside data values, so TSV avoids the quoting and
+escaping problems that affect CSV text fields.
+
+- *Default*: Any new save, export, or write step that produces
+  tabular data uses =.tsv= with tab delimiters.
+- *Exception*: CSV is permitted only when a downstream consumer
+  requires it (external tool, library API, or fixed published
+  format).
+- *No Mixed Formats*: The same dataset must not exist in both
+  TSV and CSV representations within a pipeline. When converting
+  an existing CSV output to TSV, convert all writers and readers
+  of that dataset.
+
+* Output Formatting Rules
+
+These rules define how responses should be structured when
+intended for copy-paste use or technical writing.
+
+** Copy-Paste Formatting
+
+Never use the =>= character (Markdown blockquotes) as a line
+starter in any section of a response that is intended to be
+copied, such as law definitions, configuration blocks, or code
+snippets. Use clear headers or standard lists instead.
+
+** Strict Inline Math
+
+When writing LaTeX or text containing mathematical symbols,
+variables, or equations that are not in a standalone
+=\begin{equation}= block, never use the dollar sign =$= for
+framing. Use =\( ... \)= for all inline mathematical
+expressions.
+
+** M-dash
+
+Never use m-dash in running text. Reword the sentence or use a
+comma instead.
+
+** Code Modification Format (aider sessions only)
+
+When asked for code to be returned in search-replace format, all
+proposed changes must be delivered as Aider-style blocks using
+the exact markers =<<<<<<< SEARCH=, ===========, and
+=>>>>>>>> REPLACE=, with the target file named directly above
+each block.
+
+This rule applies to aider sessions only. Opencode uses its own
+edit/write/patch tools natively. Ignore this rule when working
+in opencode.
+
+** Code First
+
+When a response contains both code and the reasoning behind it,
+place the code first and the explanation, reasoning, and other
+related text at the bottom. This is a soft rule: deviate from it
+whenever following it would hinder function or efficiency.
+
+** Response Structure
+
+Large-scope responses (project-wide or phase-wide coverage,
+status summaries, initial replies to big questions) must be
+concise, brief, and light on technical detail. Provide only the
+technical detail that is absolutely necessary to understand the
+point and act on it; everything else waits until the user asks.
+Lead with conclusions, status, and next steps. The user can
+always request more detail, so do not front-load it.
+
+* Document Integrity Rules
+
+These rules protect document metadata during refactoring and
+editing tasks.
+
+** Citation Preservation
+
+The removal or modification of citations (e.g., =\cite{...}=)
+is strictly forbidden unless explicitly requested by the user.
+Citations are considered critical document metadata; their
+removal is a destructive action and must be avoided during all
+text refactoring or alignment tasks. The same applies to the
+DOI and citation lists in =README.md=.
+
+* Research Integrity Rules
+
+These rules govern how computed numbers are produced, cited, and
+made reproducible in projects that report quantitative results.
+
+** Authoritative Computation
+
+Never hand-compute statistics. Numbers cited anywhere (manuscript,
+docs) must come from a script reading the raw output files; the
+document is corrected to match the computation, never the reverse.
+No hardcoded claimed values for validation. Scores reported from
+the pipeline (Doench 2016, Rule Set 3, FlashFry metrics) must come
+from run outputs, not from notes.
+
+** Provenance Anchoring
+
+Every published number must trace to an artifact bundle recording
+the code version (git commit or package version) and checksums of
+the input data. No number without a bundle.
+
+* Instruction File Stability
+
+AI instruction files are written once during project setup and then
+remain fixed. They define how sessions behave; sessions must not
+rewrite the definitions they operate under.
+
+** Covered Files
+
+Setup-written files that instruct or configure AI sessions:
+
+- =AGENTS.md= — opencode session startup
+- =STARTUP.org= — aider session startup
+- =RULES.org= — consolidated rules
+- =roles.org= — AI role definitions
+- =opencode.jsonc= — permissions and session configuration
+- =.opencode/commands/commitmsg.md= — pre-existing command file
+
+The class is "files that tell AI sessions how to behave".
+
+** The Rule
+
+- *Setup Is Exempt*: Filling placeholders and writing these files
+  during scaffolding is expected work, not a violation.
+- *Fixed After Setup*: Afterwards a session never edits these files
+  on its own initiative — no "improvements", no appending rules it
+  discovered, no fixing gaps it perceives.
+- *Explicit Request Only*: Changes happen only when the user
+  explicitly asks, and only when a specific, persistent problem
+  warrants the update — not for convenience or style.
+- *Report, Don't Fix*: A session that believes an instruction file
+  needs changing states the case to the user and waits.
+- *Commands, Split Rule*: Pre-existing files in =.opencode/commands/=
+  are fixed like the rest. Creating a NEW command file is allowed when
+  the work needs one — extending tooling is not rewriting the rules
+  the session runs under.
+
+** Mechanical Enforcement
+
+For opencode projects, =opencode.jsonc= carries matching permission
+rules that deny the edit/write/patch tools for these files. Existing
+commands are listed by exact path rather than a wildcard, so new
+command files remain creatable — when you add a command, add its
+deny line too. The block is a backstop, not a replacement: it does
+not cover shell commands, and it does not apply to aider sessions.
+The behavioral rule above remains binding everywhere.
+
+** Rationale
+
+These files hold the constraints the session itself must follow.
+A session editing them is grading its own homework: it can silently
+weaken any rule it is subject to. Stability of the instruction layer
+is what makes the other rules trustworthy.

@@ -1,7 +1,9 @@
-# Crispy Pipeline Documentation
+# Design: sgRNA discovery and scoring
 
 ## Overview
-**Crispy** is a specialized bioinformatics pipeline designed to identify, score, and design CRISPR guide RNAs (sgRNAs). It automates the process of moving from a genomic reference (GFF3 and FASTA) to a ranked list of target sequences with ready-to-order oligonucleotide designs.
+The **design** capability identifies, scores, and designs CRISPR guide RNAs (sgRNAs). It automates the process of moving from a genomic reference (GFF3 and FASTA) to a ranked list of target sequences with ready-to-order oligonucleotide designs.
+
+Run it as `crispytargets design` (see the [top-level README](../README.md) for installation).
 
 The pipeline integrates **FlashFry** (a high-performance CRISPR target discovery tool) with custom Python logic to handle gene hierarchy resolution, promoter region definition, accessibility scoring, and SNP-based entropy calculation.
 
@@ -31,7 +33,7 @@ The pipeline wraps the FlashFry Java JAR to perform three main tasks:
 ### 4. Post-Processing & Ranking (`post_process`)
 This is where the raw FlashFry data is refined:
 *   **Accessibility**: If an "accessome" BED file is provided, it calculates the overlap between the target and open chromatin regions.
-*   **SNP Entropy**: If a SNP BED file is provided (from the `lift_snps.py` liftover pipeline), each overlapping SNP is converted to its **IUPAC ambiguity code** (e.g., A/G → R, C/T → Y). These codes replace bases in the guide sequence, and Shannon entropy is calculated per guide. Guides at polymorphic sites receive higher entropy scores and rank lower. Individual SNP positions are annotated in the `snp_overlaps` column.
+*   **SNP Entropy**: If a SNP BED file is provided (from the `crispytargets lift` tool), each overlapping SNP is converted to its **IUPAC ambiguity code** (e.g., A/G → R, C/T → Y). These codes replace bases in the guide sequence, and Shannon entropy is calculated per guide. Guides at polymorphic sites receive higher entropy scores and rank lower. Individual SNP positions are annotated in the `snp_overlaps` column.
 *   **SNP Re-scoring** (optional): If `--rescore-snps` is enabled, FlashFry is re-run on SNP-modified sequences for guides that directly overlap SNPs. Results appear in `{metric}_snp` columns alongside reference scores, allowing direct comparison of reference vs. variant guide performance.
 *   **Oligo Design**: Generates forward and reverse primer sequences for the guides, including a 'G' prefix for T7 promoter efficiency and specific overhangs (`agat` / `aaac`).
 *   **Final Ranking**: Sorts guides based on a hierarchy: `Cutoff` $\rightarrow$ `Doench Score` $\rightarrow$ `Accessibility` $\rightarrow$ `Entropy`.
@@ -43,7 +45,7 @@ This is where the raw FlashFry data is refined:
 
 ### 1. Prerequisites
 1.  **Java Runtime Environment (JRE)**: Required to run FlashFry.
-2.  **FlashFry JAR**: You must have `FlashFry-assembly-1.15.jar` in the same directory as the script.
+2.  **FlashFry JAR**: `FlashFry-assembly-1.15.jar`, resolved via `--flashfry-jar` or `$CRISPY_FLASHFRY_JAR`.
 3.  **Python 3.x**
 
 ### 2. Environment Setup
@@ -54,24 +56,30 @@ It is highly recommended to use a virtual environment to ensure dependency isola
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 
-# Install required Python packages
-pip install -r crispy/requirements.txt
+# Install the package and its Python dependencies
+pip install -e .
 ```
 
 ### 3. Acquiring FlashFry
 The pipeline requires the FlashFry assembly JAR. Download it from the [FlashFry releases page](https://github.com/mckennalab/FlashFry/releases):
 
 ```bash
-# Option A: Download to crispy/ directory (default location)
-wget -P crispy/ https://github.com/mckennalab/FlashFry/releases/download/1.15/FlashFry-assembly-1.15.jar
+# Option A: keep it with the other external tools in this repo
+wget -P tools/ https://github.com/mckennalab/FlashFry/releases/download/1.15/FlashFry-assembly-1.15.jar
 
-# Option B: Download to a custom location
+# Option B: download to any custom location
 wget -P /path/to/tools/ https://github.com/mckennalab/FlashFry/releases/download/1.15/FlashFry-assembly-1.15.jar
 ```
 
-By default, the pipeline looks for `FlashFry-assembly-1.15.jar` in the `crispy/` directory. Override with `--flashfry-jar`:
+The JAR is an untracked external binary and is not shipped inside the
+package, so the pipeline resolves it from `--flashfry-jar` or the
+`CRISPY_FLASHFRY_JAR` environment variable:
+
 ```bash
-python3 crispy/pipeline.py --flashfry-jar /path/to/FlashFry-assembly-1.15.jar ...
+export CRISPY_FLASHFRY_JAR=tools/FlashFry-assembly-1.15.jar
+crispytargets design --gff genome.gff3 --ref genome.fa ...
+# or per run:
+crispytargets design --flashfry-jar tools/FlashFry-assembly-1.15.jar ...
 ```
 
 ### Configuration and Execution
@@ -95,12 +103,12 @@ metrics: "doench2014ontarget"
 ```
 Run the pipeline with:
 ```bash
-python crispy/pipeline.py --config config.yaml
+crispytargets design --config config.yaml
 ```
 
 #### Option B: Using Command Line Arguments
 ```bash
-python crispy/pipeline.py \
+crispytargets design \
     --gff genome_annotation.gff3 \
     --ref genome_reference.fasta \
     --genes target_genes.csv \
@@ -208,7 +216,7 @@ The model (`doench2016_model.json`) was extracted from the azimuth package bundl
 
 #### Rule Set 3 (`rs3score.py`)
 
-LightGBM model (2,279 trees) from the [GPP/rs3](https://github.com/gpp-rnd/rs3) package, using `sglearn` for feature extraction. Requires `sglearn` and `lightgbm` (see requirements.txt). Uses tracrRNA identity features (Hsu2013 default).
+LightGBM model (2,279 trees) from the [GPP/rs3](https://github.com/gpp-rnd/rs3) package, using `sglearn` for feature extraction. Requires `sglearn` and `lightgbm` (install with `pip install -e ".[rs3]"`). Uses tracrRNA identity features (Hsu2013 default).
 
 | Column | Scale | Description |
 |--------|-------|-------------|
@@ -223,8 +231,7 @@ One-time model conversion (requires `rs3test` environment):
 ```bash
 conda create -n rs3test python=3.10 scikit-learn==1.0.2 lightgbm joblib -c conda-forge -y
 conda activate rs3test
-cd crispy
-python convert_rs3_model.py --rs3-dir ~/projects/src/rs3
+python tools/convert_rs3_model.py --rs3-dir ~/projects/src/rs3
 ```
 
 #### Output columns
@@ -241,11 +248,11 @@ The `Doench2016OnTarget` column is used for cutoff filtering (`over_cutoff`).
 
 ### Running with SNP Input
 
-To use SNP data, first run the liftover pipeline (`lift_snps.py`) to convert SNP positions to your reference coordinates, then pass the resulting BED file to Crispy:
+To use SNP data, first run `crispytargets lift` to convert SNP positions to your reference coordinates, then pass the resulting BED file to the design pipeline:
 
 ```bash
 # Step 1: Lift SNPs to new assembly coordinates
-python3 idmapping/lift_snps.py \
+crispytargets lift \
     --old-genome data/old_assembly.fa \
     --new-genome data/new_assembly.fa \
     --vcf data/snps.vcf.gz \
@@ -255,7 +262,7 @@ python3 idmapping/lift_snps.py \
     --preset asm10
 
 # Step 2: Run Crispy with lifted SNPs and RS3 scoring
-python3 crispy/pipeline.py \
+crispytargets design \
     --gff data/genome_annotation.gff3 \
     --ref data/new_assembly.fa \
     --snps output/liftover/snps_lifted.bed \

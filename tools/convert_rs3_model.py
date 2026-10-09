@@ -11,6 +11,12 @@ import os
 import sys
 import argparse
 
+# The converted model ships as package data, so default the output there.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_MODEL_PATH = os.path.join(
+    _REPO_ROOT, "src", "crispytargets", "design", "data", "RuleSet3.json"
+)
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -21,10 +27,8 @@ def main():
         help="Path to the rs3 repo (e.g., ~/projects/src/rs3)"
     )
     parser.add_argument(
-        "--output", default=os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "RuleSet3.json"
-        ),
-        help="Output path for JSON model"
+        "--output", default=DEFAULT_MODEL_PATH,
+        help="Output path for JSON model (default: the packaged RuleSet3.json)"
     )
     args = parser.parse_args()
 

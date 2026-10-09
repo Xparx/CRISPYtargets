@@ -1,7 +1,13 @@
-# IDMapping: Incremental Orthology Mapping Engine
+# Mapping: orthologs and SNP liftover
 
 ## Overview
-The **IDMapping** module is a professional bioinformatics utility designed to map genomic feature IDs from a source organism to their corresponding homologs in any number of target species.
+The **mapping** capability covers the two supporting moves needed for non-model
+organisms: mapping genomic feature IDs from a source organism to their homologs
+in any number of target species, and lifting SNP positions between genome
+assemblies.
+
+Run it as `crispytargets map` and `crispytargets lift` (see the
+[top-level README](../README.md) for installation).
 
 Unlike simple BLAST wrappers, this engine implements an **Incremental Backbone** strategy. It allows researchers to build a master orthology table one species at a time, resolving complex GFF3 hierarchies to ensure that mappings are attributed to the root **Gene** rather than individual isoforms or exons.
 
@@ -89,14 +95,14 @@ blastp -query query_proteins.fasta \
 
 ### Prerequisites
 *   **Python 3.x**
-*   **Pandas & PyYAML**: `pip install pandas PyYAML`
+*   **Pandas & PyYAML** and the rest of the dependencies: `pip install -e .` from the repository root
 
 ### Running the Incremental Mapper
 The mapping is performed one species at a time. Run the script for each species you wish to add to your master table.
 
 #### Step 1: Map the first species (e.g., Human)
 ```bash
-python idmapping/run_mapping.py \
+crispytargets map \
     --gff source_organism.gff3 \
     --blast-file human_results.tsv \
     --species Human \
@@ -106,7 +112,7 @@ python idmapping/run_mapping.py \
 
 #### Step 2: Map subsequent species (e.g., Mouse)
 ```bash
-python idmapping/run_mapping.py \
+crispytargets map \
     --gff source_organism.gff3 \
     --blast-file mouse_results.tsv \
     --species Mouse \
@@ -124,7 +130,7 @@ include_top: true
 ```
 Run:
 ```bash
-python idmapping/run_mapping.py --config mapping_config.yaml --blast-file zfish.tsv --species Zebrafish
+crispytargets map --config mapping_config.yaml --blast-file zfish.tsv --species Zebrafish
 ```
 
 #### Argument Breakdown:
@@ -193,11 +199,11 @@ conda install -c bioconda -c conda-forge pysam minimap2 bcftools tabix ucsc-twob
 ### Basic usage
 
 ```bash
-python3 lift_snps.py \
+crispytargets lift \
     --old-genome old_assembly.fa \
     --new-genome new_assembly.fa \
     --vcf input_snps.vcf.gz \
-    --output output_snps.vcf.gz \
+    --output output_snps/ \
     --threads 8 \
     -v
 ```
@@ -205,11 +211,11 @@ python3 lift_snps.py \
 ### With all options
 
 ```bash
-python3 lift_snps.py \
+crispytargets lift \
     --old-genome old_assembly.fa \
     --new-genome new_assembly.fa \
     --vcf input_snps.vcf.gz \
-    --output output_snps.vcf.gz \
+    --output output_snps/ \
     --bed \
     --threads 8 \
     --preset asm10 \
@@ -220,11 +226,11 @@ python3 lift_snps.py \
 ### From a .2bit file (auto-converts)
 
 ```bash
-python3 lift_snps.py \
+crispytargets lift \
     --old-genome old_assembly.2bit \
     --new-genome new_assembly.fa \
     --vcf input_snps.vcf.gz \
-    --output output_snps.vcf.gz \
+    --output output_snps/ \
     --threads 8 \
     -v
 ```
@@ -236,7 +242,7 @@ python3 lift_snps.py \
 | `--old-genome` | Yes | — | Old assembly (FASTA or .2bit) |
 | `--new-genome` | Yes | — | New assembly FASTA |
 | `--vcf` | Yes | — | Input VCF(.gz) with old-genome coordinates |
-| `--output` | Yes | — | Output VCF (use `.vcf.gz` for compressed output) |
+| `--output` | Yes | — | Output **directory** for the lifted VCF and BED |
 | `--bed` | No | off | Also output a BED file with lifted positions |
 | `--threads` | No | 8 | Number of threads for minimap2 |
 | `--preset` | No | `asm5` | Minimap2 preset: `asm5`, `asm10`, `asm20`, `map-ont`, `map-hifi` |
@@ -246,7 +252,7 @@ python3 lift_snps.py \
 ## What the Pipeline Does
 
 1. **Whole-genome alignment** — Aligns old genome (query) to new genome (reference) using minimap2 with PAF output
-2. **Block extraction** — Parses PAF records to extract aligned blocks with coordinate correspondence between genomes
+2. **Block extraction** — Parses PAF records and splits each one into collinear blocks at its indels, yielding coordinate correspondence between genomes
 3. **Position mapping** — For each SNP position, binary-searches the aligned blocks to find the corresponding position in the new genome
 4. **VCF output** — Writes a new VCF with lifted coordinates, preserving REF, ALT, QUAL, FILTER, and INFO fields
 5. **Indexing** — Creates a `.tbi` index for the output VCF
@@ -254,13 +260,29 @@ python3 lift_snps.py \
 ### Why PAF instead of BAM?
 
 The pipeline uses minimap2's PAF output directly rather than converting to BAM. This avoids:
-- Complex CIGAR string parsing
-- Supplementary alignment handling (PAF records directly provide query start/end coordinates)
 - SAM/BAM sorting and indexing overhead
+- Supplementary alignment handling (PAF records directly provide query start/end coordinates)
 
-Each PAF record provides clean coordinate ranges:
+Each PAF record provides coordinate ranges:
 - `qstart`–`qend`: position in the old genome
 - `tstart`–`tend`: position in the new genome
+
+### Records are split at indels, using the CIGAR
+
+A PAF record usually spans many indels, so its outer coordinates are **not**
+collinear. Treating one record as one block shifts every position downstream of
+an indel by that indel's length, which silently corrupts most of the output.
+
+The pipeline therefore:
+
+1. Runs minimap2 with `-c`, so the `cg:Z:` CIGAR is emitted.
+2. Splits each record into collinear blocks at every `I`/`D` operation, so a
+   block boundary appears at each indel.
+3. Reports positions that fall inside an indel as unmapped.
+
+If a record has no CIGAR (for example, an alignment produced without `-c`), it
+falls back to a single collinear block and a warning is logged, because that is
+only correct when the alignment contains no indels.
 
 ## Preset Selection
 
@@ -321,26 +343,27 @@ tabix -p vcf Ghost_SNPs_main.vcf.gz
 
 ### Lifting SNPs to the new assembly
 
-The SNPs are in KH2013 (ci3/old) coordinates and must be lifted to the new KY2021 assembly (`HT.Ref.fasta`) before they can be used by the Crispy pipeline:
+The SNPs are in KH2013 (ci3/old) coordinates and must be lifted to the new KY2021 assembly (`HT.Ref.fasta`) before they can be used by the design pipeline:
 
 ```bash
-python3 idmapping/lift_snps.py \
+crispytargets lift \
     --old-genome data/KH2013_main.fa \
     --new-genome data/HT.Ref.fasta \
     --vcf data/Ghost_SNPs_main.vcf.gz \
-    --output data/Ghost_SNPs_lifted.vcf.gz \
+    --output output/snps_liftover \
     --bed \
     --threads 8 \
-    --preset asm10 \
-    --outdir data/
+    --preset asm10
 ```
+
+`--output` is a directory; the lifted files are named after the input VCF.
 
 ### Output files
 
 | File | Description |
 |------|-------------|
-| `Ghost_SNPs_lifted_kh2013.vcf.gz` | Lifted VCF with new-genome coordinates |
-| `Ghost_SNPs_lifted_kh2013.bed` | BED file for Crispy pipeline input |
+| `Ghost_SNPs_main_lifted.vcf.gz` | Lifted VCF with new-genome coordinates |
+| `Ghost_SNPs_main_lifted.bed` | BED file for the design pipeline's `--snps` argument |
 
 The BED file format (6 columns):
 
@@ -353,12 +376,12 @@ The BED file format (6 columns):
 | score | 1000 | QUAL from VCF (or 1000 if missing) |
 | strand | . | Always . for SNPs |
 
-### Feeding SNPs into Crispy
+### Feeding the lifted SNPs into the design pipeline
 
 Use the lifted BED file with the `--snps` argument:
 
 ```bash
-python3 crispy/pipeline.py \
+crispytargets design \
     --gff data/HT.KY21Gene.2.gff3 \
     --ref data/HT.Ref.fasta \
     --snps data/Ghost_SNPs_lifted_kh2013.bed \

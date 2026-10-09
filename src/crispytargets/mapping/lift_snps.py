@@ -19,6 +19,7 @@ import bisect
 import gzip
 import logging
 import os
+import re
 import subprocess
 import sys
 from collections import defaultdict
@@ -28,24 +29,10 @@ try:
 except ImportError:
     sys.exit("Error: pysam required. Install with: pip install pysam")
 
+from ..common.exec import run
 
-# ── helpers ──────────────────────────────────────────────────────────────────
 
-def run(cmd, desc="", check=True):
-    """Run a command; log and optionally exit on failure."""
-    logging.info(desc)
-    logging.debug("  cmd: %s", " ".join(cmd))
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=check)
-        return result
-    except subprocess.CalledProcessError as e:
-        logging.error("Command failed: %s", " ".join(cmd))
-        logging.error("STDOUT: %s", e.stdout)
-        logging.error("STDERR: %s", e.stderr)
-        if check:
-            sys.exit(1)
-        return e
-
+# ── genome alignment ─────────────────────────────────────────────────────────
 
 def convert_2bit_to_fa(twobit, fa):
     if os.path.exists(fa):
@@ -102,8 +89,11 @@ def align_genomes(new_fa, old_fa, paf_path, threads, preset="asm5"):
     """Align OLD genome (query) to NEW genome (reference) with minimap2."""
     logging.info(f"Aligning genomes (minimap2 -x {preset}) …")
 
+    # -c is required so minimap2 emits the cg:Z: CIGAR. Without it a record
+    # spanning an indel looks like one perfectly collinear block, and every
+    # position past the indel would lift to the wrong coordinate.
     result = subprocess.run(
-        ["minimap2", "-x", preset,
+        ["minimap2", "-x", preset, "-c",
          "-t", str(threads), new_fa, old_fa],
         capture_output=True, text=True
     )
@@ -121,9 +111,33 @@ def align_genomes(new_fa, old_fa, paf_path, threads, preset="asm5"):
 
 # ── position mapper ──────────────────────────────────────────────────────────
 
+def blocks_from_cigar(qstart, tname, tstart, cigar):
+    """Split a PAF CIGAR into collinear blocks.
+
+    Yields (qstart, qend, tname, tstart, tend) for each run of aligned bases
+    (M/=/X). Indels advance one offset without emitting a block, so a block
+    boundary appears at every indel. Coordinates are 0-based half-open.
+    """
+    q = qstart
+    t = tstart
+    for length, op in re.findall(r"(\d+)([MIDNSHP=X])", cigar):
+        length = int(length)
+        if op in "M=X":
+            yield (q, q + length, tname, t, t + length)
+            q += length
+            t += length
+        elif op == "I":        # query-only bases: deletion in the new assembly
+            q += length
+        elif op in "DN":       # target-only bases: insertion in the new assembly
+            t += length
+        # S/H (clipping) and P (padding) consume nothing here: PAF qstart/qend
+        # already delimit the aligned region, and minimap2 omits soft clips
+        # from the PAF CIGAR for that reason.
+
+
 class AlignmentBlockMapper:
     """
-    Stores aligned blocks from a whole-genome BAM and provides O(log n)
+    Stores aligned blocks from a whole-genome PAF and provides O(log n)
     position look-ups.
 
     Block = (old_start, old_end, new_chrom, new_start, new_end)
@@ -133,11 +147,16 @@ class AlignmentBlockMapper:
     def __init__(self):
         self.blocks = defaultdict(list)       # old_chrom → [block, …]
         self.starts = {}                      # old_chrom → [block_start, …] for fast binary search
+        self.records_without_cigar = 0        # records that could not be split
 
     # ── loading ──────────────────────────────────────────────────────────
 
     def load_from_paf(self, paf_path):
-        """Parse PAF file and extract aligned blocks."""
+        """Parse PAF file and extract aligned blocks.
+
+        Each record is split into collinear blocks at its indels using the
+        cg:Z: CIGAR, so positions downstream of an indel lift correctly.
+        """
         with open(paf_path) as f:
             for line in f:
                 fields = line.strip().split("\t")
@@ -151,8 +170,30 @@ class AlignmentBlockMapper:
                 tstart = int(fields[7])         # 0-based, inclusive
                 tend   = int(fields[8])         # exclusive
 
-                self.blocks[qname].append(
-                    (qstart, qend, tname, tstart, tend))
+                cigar = None
+                for tag in fields[12:]:
+                    if tag.startswith("cg:Z:"):
+                        cigar = tag[len("cg:Z:"):]
+                        break
+
+                if cigar:
+                    self.blocks[qname].extend(
+                        blocks_from_cigar(qstart, tname, tstart, cigar))
+                else:
+                    # No CIGAR to split on. Falling back to the whole record
+                    # treats it as collinear, which is only correct when the
+                    # alignment has no indels.
+                    self.records_without_cigar += 1
+                    self.blocks[qname].append(
+                        (qstart, qend, tname, tstart, tend))
+
+        if self.records_without_cigar:
+            logging.warning(
+                "%d PAF records had no cg:Z: CIGAR; treated as collinear blocks. "
+                "Positions downstream of indels in those records will be wrong. "
+                "Re-run the alignment with minimap2 -c.",
+                self.records_without_cigar,
+            )
 
         # sort + precompute
         for c in self.blocks:

@@ -1,0 +1,68 @@
+#+TITLE: Task List: CRISPYtargets
+
+* Hub Integration
+** DONE Scaffold hub metadata
+   Completed 2026-10-08: import via hub =scripts/scaffold.py= (project.org, specs.org, todo.org, STARTUP.org, AGENTS.md, opencode.jsonc, .opencode/ with commitmsg command).
+** DONE Write roles.org and RULES.org
+   Roles grounded in this project; six rule sets ported from =prompts/rules/= (=project_independence= deliberately excluded, hub-only).
+** DONE Fill AGENTS.md and STARTUP.org project context
+** DONE Hub entries
+   - [X] README.org project entry
+   - [X] hub todo.org task for pending workflow skills
+** TODO Write workflow skills in =.opencode/skills/=
+   Deferred until real workflows prove out. Template:
+   =template/.opencode/skills/WORKFLOW/SKILL.md= (lowercase kebab-case IDs,
+   one skill per task domain). Flip the README Opencode flag when done.
+
+* Development
+** DONE Test suite
+   Completed 2026-10-11. pytest suite under =tests/=, run with =python -m pytest tests/=.
+   Requires the =mainscworkspace= conda env (pandas, pyranges, pyfaidx, pysam,
+   biopython); the smoke and liftover tests skip themselves when java/FlashFry or
+   minimap2 are absent.
+   - [X] Feature-extraction tests for Doench 2016 (feature order, GC/normalization)
+   - [X] Strand-aware flank extraction and PAM handling tests
+   - [X] End-to-end smoke run of =crispy/pipeline.py= on a minimal reference
+   - [X] =idmapping/lift_snps.py= round-trip test with known expected positions
+   - [X] Promoter extraction strand handling (=tests/test_prepare_targets_promoters.py=)
+
+   Writing the suite surfaced three real bugs, all fixed:
+   1. =prepare_targets= raised =KeyError= on any GFF3 whose TSS features occupy
+      only one strand (draft/region-filtered/organellar annotations, or a
+      =--tss-features= label mismatch). PyRanges returns a column-less frame
+      for an empty subset. Now guarded, with a warning on label mismatch.
+   2. Reverse-strand 5' flank for Doench 2016 was read 3bp inside the
+      protospacer. On the - strand the 23-mer is read as revcomp, so the PAM
+      sits at forward [g, g+3) and the flank must start at g+23, not g+20.
+   3. =lift_snps= lifted every position downstream of an indel to the wrong
+      coordinate. minimap2 was run without =-c= so no =cg:Z: CIGAR was
+      emitted, and =load_from_paf= treated each whole record as one collinear
+      block. Now emits =-c= and splits records into blocks at indels.
+
+** DONE Packaging: pyproject.toml with entry points
+   Added in Stage 1, reworked for the src layout in Stage 2. Install with
+   =pip install -e .= (extras: =[rs3]=, =[train]=, =[test]=); single =crispytargets=
+   command with design/map/lift/clean-mapping subcommands, plus
+   =python -m crispytargets= for uninstalled use.
+
+** DONE Restructure into a regular Python package (Stages 1-4)
+   Completed 2026-10-13. Four stages, each verified independently:
+   - Stage 1: real packages + pyproject.toml + entry points.
+   - Stage 2: moved to =src/crispytargets/{design,mapping,cli}=, single CLI,
+     docs consolidated into root README + =docs/design.md= + =docs/mapping.md=.
+   - Stage 3: split =pipeline.py= into =discovery.py=, extracted shared
+     =common/{config,logging,exec}= helpers. Verified byte-identical outputs
+     across the refactor and 22->17 log lines (fixed a double-logging bug).
+   - Stage 4: cleanup. Split the concatenated =train_doench2016.py= into a
+     627-feature script and a 629-feature =_v2= script (both were running
+     back-to-back in one invocation); generalized the dead =crispy/=.gitignore
+     lines; renamed per-run logs =crispy.log= -> =design.log=,
+     =idmapping.log= -> =map.log=.
+
+   Test suite: 38 tests, =python -m pytest tests/=.
+
+* Backlog
+- [ ] Decide tracking policy for =data/= and =output/= (presently untracked but not ignored)
+- [ ] Re-run Ghost_SNPs liftover with the fixed CIGAR-aware mapper; previous
+      lifted coordinates were wrong for ~80% of variants (see the test-suite
+      bug notes above). Cached alignment at =/tmp/opencode/quantify/=.

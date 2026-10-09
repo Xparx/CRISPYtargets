@@ -1,0 +1,25 @@
+#+TITLE: Project: CRISPYtargets
+#+AUTHOR: Andreas Tjarnberg
+#+DATE: [Date]
+
+* Overview
+- *Concept*: CRISPR guide RNA design pipeline for non-model organisms, with genomic ID mapping tools.
+- *Goal*: Reliable, reproducible sgRNA design for any organism with a genome assembly and annotation: discover guides, score them (Doench 2016 Rule Set 2 and Rule Set 3), rescore against known SNPs, and deliver ranked candidates plus genome-browser tracks. The idmapping tools remove the two blockers that come with non-model work: variants that need liftover between assemblies, and gene IDs that need ortholog mapping.
+- *Target Audience*: Researchers planning CRISPR edits in species without established tooling. Self/lab use first.
+
+* Core Value Proposition
+- Established CRISPR design tools assume model-organism infrastructure. CRISPYtargets runs from a GFF3 + FASTA pair for any species.
+- Discovery (FlashFry), multi-model scoring (RS2, Rule Set 3), SNP-aware rescoring, and optional chromatin-accessibility filtering in one CLI workflow.
+- =idmapping/= covers the supporting moves: assembly liftover for variants and BLAST-based ortholog mapping to human/mouse.
+
+* High-Level Features
+- [X] sgRNA discovery and scoring pipeline (=crispy/pipeline.py=)
+- [X] Rule Set 3 scoring alongside Doench 2016 RS2 (=crispy/rs3score.py=, =crispy/convert_rs3_model.py=)
+- [X] SNP-aware rescoring and genome-browser BED output (=--rescore-snps --browser-bed=)
+- [X] SNP liftover between genome assemblies (=idmapping/lift_snps.py=)
+- [X] Ortholog mapping via BLAST (=idmapping/run_mapping.py=)
+- [ ] Automated test suite (see todo.org)
+
+* Notes & Brainstorming
+- A CRISPYtargets slide deck lives in the sibling project reveal-stress-test (=src/crispytargets.org=).
+- Model provenance is documented in =README.md= citations: Doench 2016 model extracted from crisporWebsite, RuleSet3 converted from gpp-rnd/rs3.

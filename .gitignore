@@ -29,12 +29,12 @@ __pycache__/
 *.pyo
 
 # Crispy pipeline intermediates
-crispy/htky_db/
-crispy/build/
+htky_db/
+build/
 
-# Derived model files (regenerate with convert_rs3_model.py)
-crispy/*.pkl
-crispy/*.npy
+# Derived model files (regenerate with train_doench2016.py / convert_rs3_model.py)
+*.pkl
+*.npy
 
 # Virtual Environments
 venv/
@@ -88,3 +88,5 @@ Thumbs.db
 
 .aider*
 deprecated
+/data/
+/output/

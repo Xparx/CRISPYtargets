@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "crispytargets"
+version = "0.2.0"
+description = "CRISPR guide RNA design and genomic ID mapping for non-model organisms"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Andreas Tjarnberg" }]
+dependencies = [
+    "biopython",
+    "numpy",
+    "pandas",
+    "pyfaidx",
+    "pyranges",
+    "pysam",
+    "PyYAML",
+]
+
+# rs3:  optional Rule Set 3 scoring (--rs3), imported lazily by rs3score.py
+# train: Doench 2016 model training script only (tools/, not runtime)
+# test:  the pytest suite under tests/
+[project.optional-dependencies]
+rs3 = ["lightgbm", "sglearn"]
+train = ["scikit-learn"]
+test = ["pytest"]
+
+[project.scripts]
+crispytargets = "crispytargets.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# Model artifacts load relative to their module, so they must ship alongside
+# it. The FlashFry JAR is deliberately excluded: it is an untracked external
+# binary resolved at runtime via --flashfry-jar or $CRISPY_FLASHFRY_JAR.
+[tool.setuptools.package-data]
+"crispytargets.design" = ["data/*.json"]

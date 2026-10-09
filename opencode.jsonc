@@ -1,0 +1,11 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permissions": [
+    { "action": "edit", "resource": "AGENTS.md", "effect": "deny" },
+    { "action": "edit", "resource": "STARTUP.org", "effect": "deny" },
+    { "action": "edit", "resource": "RULES.org", "effect": "deny" },
+    { "action": "edit", "resource": "roles.org", "effect": "deny" },
+    { "action": "edit", "resource": "opencode.jsonc", "effect": "deny" },
+    { "action": "edit", "resource": ".opencode/commands/commitmsg.md", "effect": "deny" }
+  ]
+}

@@ -1,0 +1,30 @@
+#+TITLE: Technical Specifications: CRISPYtargets
+
+* Tech Stack
+- *Language*: Python 3.10
+- *Libraries*: pandas, PyRanges, BioPython, pyfaidx, pysam, PyYAML, numpy; LightGBM and sglearn for Rule Set 3 inference
+- *External tools*: FlashFry 1.15 (bundled JAR), minimap2, bcftools, tabix, BLAST+ (=makeblastdb=, =blastp=)
+- *Environment*: conda environment =crispy= (recipe in README.md) plus =crispy/requirements.txt=
+- *Domain Focus*: CRISPR guide RNA design for non-model organisms
+
+* Architecture
+** Data Flow
+1. Design (=crispy/pipeline.py=): GFF3 + FASTA, optional gene list / SNP BED / accessibility BED -> FlashFry discovery -> Doench 2016 RS2 scoring with optional Rule Set 3 -> optional SNP rescoring -> ranked guides and genome-browser BED.
+2. Liftover (=idmapping/lift_snps.py=): old assembly (FASTA or .2bit) + new assembly FASTA + VCF -> minimap2 alignment -> lifted VCF and BED.
+3. Orthologs (=idmapping/run_mapping.py=): source GFF3 + BLAST =outfmt 6= hits -> thresholded ortholog table (optional top-hit retention).
+
+** Component Breakdown
+- =crispy/= — discovery, scoring (=doench2016.py=, =rs3score.py=), oligo design, model conversion and training scripts, bundled FlashFry
+- =idmapping/= — SNP liftover, identifier mapping, ortholog assignment
+- =data/=, =output/= — local reference data and run artifacts (untracked)
+
+* Data Schema / Models
+- Model artifacts shipped in-repo: =doench2016_model.json= (Rule Set 2), =RuleSet3.json= (Rule Set 3, converted from gpp-rnd/rs3)
+- Pipeline outputs: ranked guide tables, genome-browser BED tracks, per-run logs in =output/<run>/crispy.log=
+- idmapping outputs: lifted VCF/BED, ortholog TSV tables
+
+* Constraints & Requirements
+- *Reproducibility*: every reported number regenerable from inputs plus recorded run parameters (see RULES.org: Research Integrity)
+- *Compatibility*: Linux; any species with a GFF3 + FASTA; toolchain pinned through the conda recipe
+- *Model honesty*: scores from human-trained models (RS2/RS3) are transfer estimates, not organism-validated predictions; state this when reporting
+- *Data formats*: tabular outputs follow the TSV convention (see RULES.org: Data Format Rules)

@@ -1,20 +1,23 @@
 #!/bin/bash
 
 # ==============================================================================
-# Crispy Pipeline Execution Script
+# CRISPYtargets design pipeline example
 # ==============================================================================
+
+set -euo pipefail
 
 # 1. SETUP ENVIRONMENT
 echo "Setting up environment..."
-# Install python dependencies
-pip install -r crispy/requirements.txt
+# Install the package and its Python dependencies
+pip install -e .
 
-# Download the required FlashFry JAR if not present
+# Download the required FlashFry JAR if not present, and point the pipeline at it
 JAR_FILE="FlashFry-assembly-1.15.jar"
-if [ ! -f "$JAR_FILE" ]; then
+if [ ! -f "tools/$JAR_FILE" ]; then
     echo "Downloading FlashFry JAR..."
-    wget https://github.com/mckennalab/FlashFry/releases/download/1.15/$JAR_FILE
+    wget -P tools/ "https://github.com/mckennalab/FlashFry/releases/download/1.15/$JAR_FILE"
 fi
+export CRISPY_FLASHFRY_JAR="tools/$JAR_FILE"
 
 # 2. DEFINE FILE PATHS
 # Update these paths to point to your actual data files
@@ -26,9 +29,9 @@ SNP_BED="data/cint.snps.bed"      # Optional
 FILTER_BED="data/cint.bed"        # Optional (e.g., conserved regions)
 
 # 3. RUN THE PIPELINE
-echo "Starting Crispy Pipeline..."
+echo "Starting the design pipeline..."
 
-python crispy/pipeline.py \
+crispytargets design \
     --genes "$GENES_CSV" \
     --gff "$GFF_FILE" \
     --ref "$REF_FASTA" \
@@ -37,4 +40,4 @@ python crispy/pipeline.py \
     --filter-bed "$FILTER_BED" \
     --cutoff 0.5
 
-echo "Pipeline finished. Check final_sgrnas.csv for results."
+echo "Pipeline finished. Check output/final_sgrnas.tsv for results."

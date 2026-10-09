@@ -1,30 +1,9 @@
 import argparse
 import logging
-import yaml
-from mapper import create_mapping
 
-def load_config(config_path):
-    try:
-        with open(config_path, 'r') as f:
-            return yaml.safe_load(f) or {}
-    except Exception as e:
-        logging.error(f"Failed to load config file {config_path}: {e}")
-        return {}
-
-def setup_logging(log_name="idmapping.log"):
-    logger = logging.getLogger()
-    logger.setLevel(logging.DEBUG)
-    
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
-    
-    file_handler = logging.FileHandler(log_name)
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-    
-    logger.addHandler(console_handler)
-    logger.addHandler(file_handler)
+from ..common.config import load_config
+from ..common.logging import setup_logging
+from .mapper import create_mapping
 
 def main():
     # Pre-parse to check for config file
@@ -45,7 +24,7 @@ def main():
 
     args = parser.parse_args()
 
-    setup_logging()
+    setup_logging(log_name="map.log")
     logging.info(f"Running incremental mapping for {args.species}: E-value={args.evalue}")
     create_mapping(
         gff3_path=args.gff,
