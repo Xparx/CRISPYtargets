@@ -1,6 +1,32 @@
+import re
 import pandas as pd
 import urllib.parse
 import logging
+
+
+def load_proteome_symbols(proteome_path):
+    """Parse a UniProt FASTA into {entry_name: gene_symbol}.
+
+    The entry name (e.g. ``FGF13_MOUSE``) is what our BLAST sseqid resolves
+    to; the ``GN=`` field carries the official gene symbol (MGI for mouse,
+    HGNC for human), e.g. ``GN=Fgf13``. Returns {} if the file is empty or
+    unreadable so callers degrade gracefully.
+    """
+    entry2sym = {}
+    try:
+        with open(proteome_path) as f:
+            for line in f:
+                if not line.startswith('>'):
+                    continue
+                parts = line.split('|')
+                entry = parts[2].split()[0] if len(parts) >= 3 else None
+                m = re.search(r'GN=(\S+)', line)
+                if entry and m:
+                    entry2sym[entry] = m.group(1)
+    except OSError:
+        logging.warning("Could not read proteome %s; no gene symbols will be added.",
+                        proteome_path)
+    return entry2sym
 
 class GFF3Resolver:
     def __init__(self, gff3_path):
@@ -58,12 +84,14 @@ class GFF3Resolver:
                     
         return fid # Fallback to original ID if no gene ancestor is found
 
-def create_mapping(gff3_path, blast_path, species_label, output_path, evalue_threshold=1e-50, include_top=False):
+def create_mapping(gff3_path, blast_path, species_label, output_path, evalue_threshold=1e-50,
+                   include_top=False, proteome_path=None):
     resolver = GFF3Resolver(gff3_path)
+    entry2sym = load_proteome_symbols(proteome_path) if proteome_path else {}
     cols = ['qseqid', 'sseqid', 'pident', 'length', 'mismatch', 'gapopen',
             'qstart', 'qend', 'sstart', 'send', 'evalue', 'bitscore']
 
-    def process_species(path):
+    def process_species(path, entry2sym):
         try:
             df = pd.read_csv(path, sep='\t', names=cols)
             if df.shape[1] != 12:
@@ -95,17 +123,22 @@ def create_mapping(gff3_path, blast_path, species_label, output_path, evalue_thr
         for gene_id, group in filtered_df.groupby('gene_id'):
             # The first row is the best hit (highest bitscore)
             top_hit = group.iloc[0]['sseqid'].split('|')[-1] if isinstance(group.iloc[0]['sseqid'], str) else group.iloc[0]['sseqid']
-            
+
             # All other unique genes are secondary
             others = group['sseqid'].unique()
             others = [s.split('|')[-1] if isinstance(s, str) else s for s in others]
             others = [o for o in others if o != top_hit]
-            
-            results.append({
+
+            row = {
                 'gene_id': gene_id,
                 'primary': top_hit,
                 'secondary': '|'.join(others)
-            })
+            }
+            if entry2sym:
+                sym = entry2sym.get(top_hit)
+                row['symbol'] = sym
+                row['uniq'] = f"{sym}-{gene_id}" if sym else gene_id
+            results.append(row)
 
         return pd.DataFrame(results)
 
@@ -123,19 +156,23 @@ def create_mapping(gff3_path, blast_path, species_label, output_path, evalue_thr
         backbone = pd.DataFrame({'gene_id': all_genes})
 
     # 2. Process the new species
-    species_df = process_species(blast_path)
+    species_df = process_species(blast_path, entry2sym)
     if species_df.empty:
         logging.warning(f"No significant hits found for {species_label}. Backbone unchanged.")
         return backbone
 
     # 3. Rename columns to include species label
-    species_df = species_df.rename(columns={
+    rename = {
         'primary': f"{species_label}_primary",
         'secondary': f"{species_label}_secondary"
-    })
+    }
+    if 'symbol' in species_df.columns:
+        rename['symbol'] = f"{species_label}_symbol"
+        rename['uniq'] = f"{species_label}_uniq"
+    species_df = species_df.rename(columns=rename)
 
     # 4. Collision Handling: Remove existing columns for this species if they exist
-    cols_to_drop = [f"{species_label}_primary", f"{species_label}_secondary"]
+    cols_to_drop = list(rename.values())
     backbone = backbone.drop(columns=[c for c in cols_to_drop if c in backbone.columns])
 
     # 5. Left Join new species data onto the backbone

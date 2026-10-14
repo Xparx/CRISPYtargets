@@ -57,6 +57,10 @@ build/
 *.csv
 *.tsv
 
+# Test fixtures are small, pinned regression inputs and must stay tracked
+# despite the generic data-file ignores above.
+!tests/fixtures/**
+
 # Pipeline Intermediate and Output Files
 targets.bed
 targets.fasta

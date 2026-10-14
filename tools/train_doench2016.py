@@ -43,12 +43,17 @@ def nucleotide_features(seq, order):
     return pd, pi
 
 def featurize_30mer(s):
-    """Extract 627 features from a 30mer string."""
+    """Extract 627 features from a 30mer string.
+
+    The 30mer uses the Azimuth layout (4bp 5' flank + 20bp guide +
+    3bp PAM + 3bp 3' flank; guide at offset 4..23, PAM at 24..26).
+    GC is computed from the guide, s[4:24], matching Azimuth's countGC.
+    """
     pd1, pi1 = nucleotide_features(s, 1)
     pd2, pi2 = nucleotide_features(s, 2)
 
-    # GC features on guide (positions 5-24)
-    guide = s[5:25]
+    # GC features on guide (Azimuth: s[4:24])
+    guide = s[4:24]
     gc = sum(1 for c in guide if c in 'GC')
     gc_feat = np.array([1 if gc > 10 else 0, 1 if gc < 10 else 0, gc])
 

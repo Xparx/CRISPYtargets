@@ -1,12 +1,13 @@
 import argparse
 import os
 import sys
+import time
 import numpy as np
 import pandas as pd
 import pyranges as pr
 import logging
 from pyfaidx import Fasta
-from .discovery import discover_and_score, extract_sequences, rescore_with_snps
+from .discovery import discover_and_score, extract_sequences
 from ..common.config import load_config
 from ..common.exec import run_command
 from ..common.logging import setup_logging
@@ -14,6 +15,69 @@ from .utils import calculate_entropy, design_oligos, parse_flashfry_contig
 from .utils import complement_iupac, snp_to_iupac
 from .doench2016 import score_guides
 import gc
+
+
+def _strip_namespace(fid):
+    """Strip a GFF3 namespace prefix, e.g. 'KY21:KY21.Chr1.709' -> 'KY21.Chr1.709'.
+
+    Lets bare gene IDs in a user-supplied list match namespaced annotations.
+    A no-op for IDs without a namespace prefix.
+    """
+    return fid.split(':', 1)[-1] if fid and ':' in fid else fid
+
+
+def _norm_ids(series):
+    """Normalize a GFF ID-like column for matching.
+
+    Strips any namespace prefix and maps missing/placeholder values (NaN and
+    the 'nan'/'None' strings produced by astype(str)) to None, so they never
+    match and never leak into the gene expansion.
+    """
+    return series.astype(str).map(_strip_namespace).replace(
+        {"": None, "nan": None, "None": None})
+
+
+def _parse_alt(name):
+    """Parse the concrete ALT allele from a SNP name like 'chr:pos:REF/ALT'.
+
+    Returns the ALT base (uppercased) or None if the name has no REF/ALT
+    suffix. Used to build variant sequences for rescoring.
+    """
+    try:
+        ref_alt = str(name).rsplit(':', 1)[-1]
+        if '/' not in ref_alt:
+            return None
+        alt = ref_alt.split('/')[-1].strip().upper()
+        return alt if alt in ('A', 'C', 'G', 'T') else None
+    except Exception:
+        return None
+
+
+def _score_variant(guide, pam, flank5, flank3, alt_by_pos, rs3_fn=None):
+    """Score a variant guide with ALT alleles substituted.
+
+    alt_by_pos maps a position in the 23-mer (guide 0..19, PAM 20..22) to the
+    concrete ALT base. Uses the real flanks and real PAM so the variant score is
+    directly comparable to the reference score. Returns (rs2, rs3); rs3 is NaN
+    when rs3_fn is None.
+    """
+    g = list(guide)
+    p = list(pam)
+    for rp, alt in alt_by_pos.items():
+        if rp < len(g):
+            g[rp] = alt
+        else:
+            p[rp - len(g)] = alt
+    g = "".join(g)
+    p = "".join(p)
+
+    rs2 = float(score_guides([g], flanks=[(flank5, flank3)], pams=[p])[0])
+    rs3 = np.nan
+    if rs3_fn is not None:
+        left = flank5[-4:] if flank5 and len(flank5) >= 4 else "N" * 4
+        right = flank3[:3] if flank3 and len(flank3) >= 3 else "N" * 3
+        rs3 = float(rs3_fn([(left + g + p + right).upper()])[0])
+    return rs2, rs3
 
 
 class CrispyPipeline:
@@ -96,11 +160,18 @@ class CrispyPipeline:
         # Optional: Filter by provided gene list
         if self.args.genes:
             logging.info(f"Filtering by gene list: {self.args.genes}")
-            # Load seed IDs from CSV
-            seed_ids = set(pd.read_csv(self.args.genes)['Gene.ID'].astype(str).tolist())
+            # Load seed IDs, normalized so bare IDs match namespaced GFF IDs.
+            seed_ids = {_strip_namespace(s) for s in
+                        pd.read_csv(self.args.genes)['Gene.ID'].astype(str)}
 
             # We need the full GFF to resolve the hierarchy
             gff_df = gr.df
+
+            # Normalize GFF match keys (strip any 'NAMESPACE:' prefix) so a bare
+            # user ID like KY21.Chr1.709 matches KY21:KY21.Chr1.709. No-op for
+            # non-namespaced annotations.
+            id_norm = _norm_ids(gff_df['ID']) if 'ID' in gff_df.columns else None
+            parent_norm = _norm_ids(gff_df['Parent']) if 'Parent' in gff_df.columns else None
 
             # 1. Initialize expanded_ids with seed_ids.
             # This ensures that if a seed is already a Parent or ID, the loop finds children.
@@ -108,19 +179,16 @@ class CrispyPipeline:
 
             # Also map any features that match seed IDs in Name/name columns to their IDs
             for col in ['Name', 'name']:
-                if col in gff_df.columns:
-                    matches = gff_df[gff_df[col].astype(str).isin(seed_ids)]
-                    if 'ID' in matches.columns:
-                        expanded_ids.update(matches['ID'].dropna().astype(str).tolist())
+                if col in gff_df.columns and id_norm is not None:
+                    name_norm = _norm_ids(gff_df[col])
+                    expanded_ids.update(id_norm[name_norm.isin(seed_ids)].dropna().tolist())
 
             # 2. Recursive Expansion: Find all children (Gene -> mRNA -> Exon/CDS)
             while True:
                 prev_count = len(expanded_ids)
-                if 'Parent' in gff_df.columns:
+                if id_norm is not None and parent_norm is not None:
                     # Find features whose Parent is in our current expanded set
-                    children = gff_df[gff_df['Parent'].astype(str).isin(expanded_ids)]
-                    if 'ID' in children.columns:
-                        expanded_ids.update(children['ID'].dropna().astype(str).tolist())
+                    expanded_ids.update(id_norm[parent_norm.isin(expanded_ids)].dropna().tolist())
 
                 if len(expanded_ids) == prev_count:
                     break
@@ -128,11 +196,10 @@ class CrispyPipeline:
             logging.info(f"Expanded {len(seed_ids)} seed IDs to {len(expanded_ids)} total related features.")
 
             # 3. Filter targets: Keep if ID or Parent is in the expanded set
-            # Use vectorized .isin() for performance
-            id_col = targets.df['ID'].astype(str) if 'ID' in targets.df.columns else pd.Series([''] * len(targets.df))
-            parent_col = targets.df['Parent'].astype(str) if 'Parent' in targets.df.columns else pd.Series([''] * len(targets.df))
-            
-            combined_mask = id_col.isin(expanded_ids) | parent_col.isin(expanded_ids)
+            tgt_id = _norm_ids(targets.df['ID']) if 'ID' in targets.df.columns else pd.Series([None] * len(targets.df))
+            tgt_parent = _norm_ids(targets.df['Parent']) if 'Parent' in targets.df.columns else pd.Series([None] * len(targets.df))
+
+            combined_mask = tgt_id.isin(expanded_ids) | tgt_parent.isin(expanded_ids)
             targets = targets[combined_mask]
 
         else:
@@ -249,23 +316,26 @@ class CrispyPipeline:
             return ''.join(comp.get(c, 'N') for c in reversed(seq.upper()))
 
         def get_flank(chrom, guide_start, strand):
+            # Returns the genomic flanks around the guide+PAM in guide
+            # orientation: (5bp 5' flank, 3bp 3' flank). Consumers slice to the
+            # Azimuth/RS3 convention of 4bp 5' + 3bp 3'.
             if strand == '-':
                 # On the - strand the 23-mer at fwd[guide_start, guide_start+23)
                 # is read as the reverse complement, so the PAM sits at the
                 # LOW-coordinate end: PAM is fwd[g, g+3) and the protospacer is
                 # fwd[g+3, g+23). The guide-orientation 5' flank is therefore the
-                # 5 bases AFTER the protospacer on the forward strand.
+                # bases AFTER the protospacer on the forward strand.
                 left_start = guide_start + self.args.target_len + self.args.pam_len
                 left = str(genome[chrom][left_start:left_start + 5].seq) if left_start + 5 <= len(genome[chrom]) else None
                 # 3' flank is BEFORE the PAM on the forward strand.
                 right_end = guide_start
-                right = str(genome[chrom][right_end - 2:right_end].seq) if right_end >= 2 else None
+                right = str(genome[chrom][right_end - 3:right_end].seq) if right_end >= 3 else None
                 return (revcomp(left) if left else None,
                         revcomp(right) if right else None)
             # Forward strand
             left = str(genome[chrom][guide_start - 5:guide_start].seq) if guide_start >= 5 else None
             right_start = guide_start + self.args.target_len + self.args.pam_len
-            right = str(genome[chrom][right_start:right_start + 2].seq) if right_start + 2 <= len(genome[chrom]) else None
+            right = str(genome[chrom][right_start:right_start + 3].seq) if right_start + 3 <= len(genome[chrom]) else None
             return left, right
 
         guide_starts = (df['Start'].astype(int) + df['start'].astype(int)).values
@@ -280,13 +350,16 @@ class CrispyPipeline:
         if getattr(self.args, 'rs3', False):
             try:
                 from .rs3score import score_guides as rs3_score_guides
-                # rs3 needs 30mers: 5bp flank + 20bp guide + 3bp PAM + 2bp flank
+                # rs3 needs the Azimuth 30mer layout:
+                #   4bp 5' flank + 20bp guide + 3bp PAM + 3bp 3' flank,
+                # guide at offset 4..23, PAM at 24..26. (CRISPOR feeds
+                # s[26:56] of its 100bp window, which is this layout.)
                 rs3_seqs = []
                 for i in range(len(df)):
-                    flank5 = flanks[i][0] if flanks[i][0] else "NNNNN"
-                    flank3 = flanks[i][1] if flanks[i][1] else "NN"
-                    left = flank5[-5:] if len(flank5) >= 5 else flank5.rjust(5, "N")
-                    right = flank3[:2] if len(flank3) >= 2 else flank3.ljust(2, "N")
+                    flank5 = flanks[i][0] if flanks[i][0] else "NNNN"
+                    flank3 = flanks[i][1] if flanks[i][1] else "NNN"
+                    left = flank5[-4:] if len(flank5) >= 4 else flank5.rjust(4, "N")
+                    right = flank3[:3] if len(flank3) >= 3 else flank3.ljust(3, "N")
                     s30 = (left + guides_20bp[i] + pams[i] + right).upper()
                     rs3_seqs.append(s30)
                 df['RuleSet3'] = rs3_score_guides(rs3_seqs)
@@ -365,15 +438,19 @@ class CrispyPipeline:
             j_df['snp_code'] = j_df['Name'].apply(snp_to_iupac)
             # Keep original for annotation display
             j_df['snp_code_orig'] = j_df['snp_code']
-            # Complement for minus-strand guides (needed for sequence substitution)
+            # Concrete ALT allele (ref/alt parsed from the SNP name) for variant
+            # rescoring; complemented for minus-strand guides so it is in the
+            # guide's own sequence orientation.
+            j_df['alt_allele'] = j_df['Name'].apply(_parse_alt)
             minus_mask = j_df['Strand'] == '-'
             j_df.loc[minus_mask, 'snp_code'] = j_df.loc[minus_mask, 'snp_code'].apply(complement_iupac)
+            j_df.loc[minus_mask, 'alt_allele'] = j_df.loc[minus_mask, 'alt_allele'].apply(complement_iupac)
 
             # 3. GROUPED MUTATION: Only loop over targets that have at least one SNP
             grouped = j_df.groupby('orig_idx')
             entropy_results = {}
             snp_annotations = {}
-            snp_sequences = {}
+            snp_variant_info = {}
 
             for idx, group in grouped:
                 # Get original sequence
@@ -381,63 +458,83 @@ class CrispyPipeline:
                 seq_len = len(seq_list)
                 
                 overlaps = []
+                variants = []
                 for row in group.itertuples():
                     if 0 <= row.rel_pos < seq_len:
                         seq_list[row.rel_pos] = row.snp_code
                         overlaps.append(f"{row.rel_pos}:{row.Name}>{row.snp_code_orig}")
+                        if row.alt_allele:
+                            variants.append((int(row.rel_pos), row.alt_allele, str(row.Name)))
                 
                 entropy_results[idx] = calculate_entropy(seq_list)
                 snp_annotations[idx] = '|'.join(overlaps) if overlaps else '.'
-                snp_sequences[idx] = seq_list
+                snp_variant_info[idx] = variants
 
             # Map results back to the main dataframe
             df['entropy'] = df.index.map(entropy_results).fillna(0.0)
             df['snp_overlaps'] = df.index.map(snp_annotations).fillna('.')
             df['num_snps'] = df['snp_overlaps'].apply(lambda x: 0 if x == '.' else x.count('|') + 1)
 
-            # Re-score with SNPs incorporated (if requested)
-            if getattr(self.args, 'rescore_snps', False) and snp_sequences:
-                expected_len = self.args.target_len + self.args.pam_len
-                snp_fasta = os.path.join(self.outdir, "targets_snp.fasta")
-                with open(snp_fasta, 'w') as f:
-                    for idx, seq_list in snp_sequences.items():
-                        row = df.loc[idx]
-                        f.write(f">{row.gene_id}|{row.feature}|{row.Chromosome}:{row.Start}-{row.End}|{row.Strand}\n{''.join(seq_list)}\n")
+            # Re-score guides that overlap SNPs (if requested): compute RS2/RS3 on
+            # variant sequences (concrete ALT allele, real flanks, real PAM) and
+            # report per-guide avg/worst single-SNP and all-SNP scores, deltas vs
+            # reference, and the min distance from a SNP to the PAM and cut site.
+            if getattr(self.args, 'rescore_snps', False) and snp_variant_info:
+                rs3_fn = None
+                if 'RuleSet3' in df.columns:
+                    try:
+                        from .rs3score import score_guides as rs3_fn
+                    except ImportError:
+                        logging.warning("rs3score unavailable; SNP rescoring RS2 only")
 
-                logging.info("Running FlashFry on SNP-modified sequences...")
-                snp_scored = rescore_with_snps(
-                    self.ff_jar, self.db, self.outdir, self.args, snp_fasta)
-                snp_df = pd.read_csv(snp_scored, sep='\t')
-                snp_seq_col = None
-                for col in snp_df.columns:
-                    first_val = snp_df[col].dropna().iloc[0] if not snp_df[col].dropna().empty else None
-                    if isinstance(first_val, str) and len(first_val) == expected_len:
-                        snp_seq_col = col
-                        break
-                if snp_seq_col:
-                    # Only merge back guides that directly overlap SNPs
-                    # (other guides in the same target region are unaffected)
-                    snps_contigs = set(df.loc[j_df['orig_idx'].unique(), 'contig'])
-                    snp_df_filtered = snp_df[snp_df['contig'].isin(snps_contigs)]
+                res = {}
+                for idx, variants in snp_variant_info.items():
+                    if not variants:
+                        continue
+                    ref_rs2 = float(df.at[idx, 'Doench2016OnTarget'])
+                    ref_rs3 = float(df.at[idx, 'RuleSet3']) if 'RuleSet3' in df.columns else np.nan
+                    g = guides_20bp[idx]
+                    p = pams[idx]
+                    f5, f3 = flanks[idx]
 
-                    score_cols = [c for c in snp_df_filtered.columns
-                                  if c in df.columns
-                                  and c not in ['chrom', 'start', 'end', 'stop',
-                                                'strand', 'contig']]
-                    rename_map = {c: f'{c}_snp' for c in score_cols}
-                    snp_to_merge = snp_df_filtered[['contig'] + score_cols].rename(columns=rename_map)
-                    df = df.merge(snp_to_merge, on='contig', how='left')
-                    logging.info("Re-scored %d / %d guides that directly overlap SNPs",
-                                 len(snp_df_filtered), len(snp_df))
-                    # Clear _snp scores for guides that don't overlap any SNPs
-                    snp_score_cols = [c for c in df.columns if c.endswith('_snp')]
-                    df.loc[df['num_snps'] == 0, snp_score_cols] = np.nan
-                else:
-                    logging.warning("Could not find matching sequence column in SNP output")
+                    per = [_score_variant(g, p, f5, f3, {rp: alt}, rs3_fn) for rp, alt, _ in variants]
+                    rs2s = [x[0] for x in per]
+                    rs3s = [x[1] for x in per]
+                    all_rs2, all_rs3 = _score_variant(g, p, f5, f3, {rp: alt for rp, alt, _ in variants}, rs3_fn)
+
+                    row = {
+                        'Doench2016OnTarget_avg1snp': float(np.mean(rs2s)),
+                        'Doench2016OnTarget_worst1snp': float(np.min(rs2s)),
+                        'Doench2016OnTarget_allsnps': all_rs2,
+                        'Doench2016_delta_avg': float(np.mean(rs2s)) - ref_rs2,
+                        'Doench2016_delta_worst': float(np.min(rs2s)) - ref_rs2,
+                        'Doench2016_delta_all': all_rs2 - ref_rs2,
+                        # distance from SNP to PAM boundary (23-mer pos 20): >0 in
+                        # guide, <=0 inside PAM. Cut site is between guide 17/18.
+                        'snp_pam_dist': int(min(20 - rp for rp, _, _ in variants)),
+                        'snp_cut_dist': int(min(abs(rp - 17) for rp, _, _ in variants)),
+                    }
+                    if rs3_fn is not None and not np.isnan(ref_rs3):
+                        row.update({
+                            'RuleSet3_avg1snp': float(np.mean(rs3s)),
+                            'RuleSet3_worst1snp': float(np.min(rs3s)),
+                            'RuleSet3_allsnps': all_rs3,
+                            'RuleSet3_delta_avg': float(np.mean(rs3s)) - ref_rs3,
+                            'RuleSet3_delta_worst': float(np.min(rs3s)) - ref_rs3,
+                            'RuleSet3_delta_all': all_rs3 - ref_rs3,
+                        })
+                    res[idx] = row
+
+                if res:
+                    res_df = pd.DataFrame.from_dict(res, orient='index')
+                    for col in res_df.columns:
+                        df[col] = df.index.map(res_df[col])
+                    logging.info("SNP-variant rescoring done for %d guides (RS2%s)",
+                                 len(res), " + RS3" if rs3_fn is not None else "")
             elif getattr(self.args, 'rescore_snps', False):
                 logging.info("No SNPs found to re-score")
             else:
-                logging.info("SNP re-scoring skipped (use --rescore-snps to enable)")
+                logging.info("SNP rescoring skipped (use --rescore-snps to enable)")
 
         # 3. Oligo Design
         oligos = df.apply(
@@ -489,15 +586,39 @@ class CrispyPipeline:
         # Return full sorted list for selection
         final = df
 
-        # Move gene_id to first column
-        cols = list(final.columns)
-        if 'gene_id' in cols:
-            cols.remove('gene_id')
-            cols.insert(0, 'gene_id')
-            final = final[cols]
+        # Strict mode: keep only guides that pass the Doench 2016 cutoff, so the
+        # output holds just the usable candidates. Ranking is done above, so the
+        # kept rows are already in final order.
+        if getattr(self.args, 'strict', False):
+            kept = int(final['over_cutoff'].sum())
+            dropped = len(final) - kept
+            final = final[final['over_cutoff']]
+            logging.info("Strict mode: kept %d guides over cutoff %.2f, dropped %d",
+                         kept, self.args.cutoff, dropped)
+
+        # Column order: our own columns first, grouped so related scores sit next to
+        # each other (identity, coordinates, reference scores, guide sequence, SNP
+        # annotation, variant scores). The default off-target metrics (Hsu2013,
+        # otCount) live in the reference block; any further FlashFry metric the
+        # user requested through --metrics trails at the end, as pure pass-through.
+        _own_order = [
+            'gene_id', 'feature', 'over_cutoff',
+            'Chromosome', 'Start', 'End', 'Strand', 'start', 'stop', 'contig',
+            'Doench2016OnTarget', 'RuleSet3', 'Hsu2013', 'otCount', 'accessibility',
+            'target', 'context', 'orientation', 'overflow', 'fwd', 'rev',
+            'num_snps', 'snp_overlaps', 'entropy', 'snp_pam_dist', 'snp_cut_dist',
+            'Doench2016OnTarget_avg1snp', 'Doench2016OnTarget_worst1snp', 'Doench2016OnTarget_allsnps',
+            'Doench2016_delta_avg', 'Doench2016_delta_worst', 'Doench2016_delta_all',
+            'RuleSet3_avg1snp', 'RuleSet3_worst1snp', 'RuleSet3_allsnps',
+            'RuleSet3_delta_avg', 'RuleSet3_delta_worst', 'RuleSet3_delta_all',
+        ]
+        ordered = [c for c in _own_order if c in final.columns]
+        ordered += [c for c in final.columns if c not in ordered]
+        final = final[ordered]
 
         final.to_csv(os.path.join(self.outdir, "final_sgrnas.tsv"), sep='\t', index=False)
-        logging.info("Done. Results saved to %s", os.path.join(self.outdir, "final_sgrnas.tsv"))
+        logging.info("Done. Results saved to %s (%d rows)",
+                     os.path.join(self.outdir, "final_sgrnas.tsv"), len(final))
 
         # Genome browser BED output
         if getattr(self.args, 'browser_bed', False):
@@ -592,8 +713,10 @@ def main():
     parser.add_argument("--target-len", type=int, default=config.get('target_len', 20), help="Expected target sequence length (default 20)")
     parser.add_argument("--pam-len", type=int, default=config.get('pam_len', 3), help="Expected PAM length (default 3)")
     parser.add_argument("--mem", type=str, default=config.get('mem', "8g"), help="Memory limit for FlashFry (e.g., 4g, 8g, 16g)")
-    parser.add_argument("--metrics", type=str, default=config.get('metrics', "doench2014ontarget"), help="FlashFry scoring metrics, comma-separated (default: doench2014ontarget)")
-    parser.add_argument("--rescore-snps", action="store_true", help="Re-run FlashFry scoring with SNPs incorporated into target sequences")
+    parser.add_argument("--metrics", type=str, default=config.get('metrics', "hsu2013"), help="FlashFry scoring metrics, comma-separated (default: hsu2013, the off-target specificity score; add on-target metrics such as doench2014ontarget to request them, they land as trailing columns)")
+    parser.add_argument("--rescore-snps", action="store_true", help="Re-score SNP-overlapping guides with RS2/RS3 variant sequences (avg/worst single-SNP and all-SNP scores plus deltas)")
+    parser.add_argument("--strict", action="store_true",
+                        help="Write only guides over --cutoff to final_sgrnas.tsv (default: keep all, ranked)")
     parser.add_argument("--rs3", action="store_true",
                         help="Compute Rule Set 3 scores (requires sglearn and lightgbm)")
     parser.add_argument("--browser-bed", action="store_true",
@@ -611,12 +734,22 @@ def main():
     # Per-run log lives in the outdir alongside the other outputs.
     setup_logging(log_name=os.path.join(args.outdir, "design.log"))
     pipeline = CrispyPipeline(args)
+    t_start = time.perf_counter()
+
     targets = pipeline.prepare_targets()
     if targets is None or len(targets) == 0:
         logging.error("No target regions were found in the GFF. Check your feature labels (exon, CDS, mRNA, transcript).")
         sys.exit(1)
+    t_prepared = time.perf_counter()
+
     scored_file = pipeline.run_flashfry(targets)
+    t_scored = time.perf_counter()
+
     pipeline.post_process(scored_file)
+    t_done = time.perf_counter()
+
+    logging.info("Timing: prepare targets %.1fs | FlashFry index/discover/score %.1fs | post-process %.1fs | total %.1fs",
+                 t_prepared - t_start, t_scored - t_prepared, t_done - t_scored, t_done - t_start)
 
 
 if __name__ == "__main__":

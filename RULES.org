@@ -100,13 +100,6 @@ escaping problems that affect CSV text fields.
 These rules define how responses should be structured when
 intended for copy-paste use or technical writing.
 
-** Copy-Paste Formatting
-
-Never use the =>= character (Markdown blockquotes) as a line
-starter in any section of a response that is intended to be
-copied, such as law definitions, configuration blocks, or code
-snippets. Use clear headers or standard lists instead.
-
 ** Strict Inline Math
 
 When writing LaTeX or text containing mathematical symbols,
@@ -119,25 +112,6 @@ expressions.
 
 Never use m-dash in running text. Reword the sentence or use a
 comma instead.
-
-** Code Modification Format (aider sessions only)
-
-When asked for code to be returned in search-replace format, all
-proposed changes must be delivered as Aider-style blocks using
-the exact markers =<<<<<<< SEARCH=, ===========, and
-=>>>>>>>> REPLACE=, with the target file named directly above
-each block.
-
-This rule applies to aider sessions only. Opencode uses its own
-edit/write/patch tools natively. Ignore this rule when working
-in opencode.
-
-** Code First
-
-When a response contains both code and the reasoning behind it,
-place the code first and the explanation, reasoning, and other
-related text at the bottom. This is a soft rule: deviate from it
-whenever following it would hinder function or efficiency.
 
 ** Response Structure
 
@@ -194,7 +168,7 @@ rewrite the definitions they operate under.
 Setup-written files that instruct or configure AI sessions:
 
 - =AGENTS.md= — opencode session startup
-- =STARTUP.org= — aider session startup
+- =STARTUP.org= — session startup and bootstrap prompt
 - =RULES.org= — consolidated rules
 - =roles.org= — AI role definitions
 - =opencode.jsonc= — permissions and session configuration
@@ -226,7 +200,7 @@ rules that deny the edit/write/patch tools for these files. Existing
 commands are listed by exact path rather than a wildcard, so new
 command files remain creatable — when you add a command, add its
 deny line too. The block is a backstop, not a replacement: it does
-not cover shell commands, and it does not apply to aider sessions.
+not cover shell commands.
 The behavioral rule above remains binding everywhere.
 
 ** Rationale
@@ -235,3 +209,22 @@ These files hold the constraints the session itself must follow.
 A session editing them is grading its own homework: it can silently
 weaken any rule it is subject to. Stability of the instruction layer
 is what makes the other rules trustworthy.
+
+* Simplicity Principle
+
+Choices must favour simple solutions over complex ones whenever
+both meet the need. Prefer the straightforward approach, fewer
+moving parts, and standard tools over custom machinery;
+complexity must earn its keep with a concrete reason. Reviews
+treat simplicity as a primary aim: complexity without
+justification is flagged, and the simpler alternative is
+proposed before the change is accepted.
+
+* Dependency Bounds
+
+- No upper bounds: version pins in packaging metadata must not
+  cap the top of a range (e.g. =numpy<2=) unless no other option
+  can be found
+- Installing the project must never risk downgrading packages
+  already present in the user's environment; a downgrade only
+  when warranted, with the reason stated

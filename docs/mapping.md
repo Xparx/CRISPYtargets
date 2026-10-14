@@ -396,3 +396,77 @@ crispytargets design \
 - Small scaffolds may not map reliably — filter to main chromosomes for best results
 - Output VCF is sorted by chromosome and position
 - The pipeline handles both gzipped and ungzipped VCF input/output
+
+## Reproducing an ortholog mapping
+
+The `map` command is general-purpose: it maps genes from any source GFF3 to
+orthologs in one or more species using BLAST results, building a single
+incremental TSV (one row per source gene). It is not tied to any particular
+genome. **No data files are stored in this repository** — download your inputs
+and run the recipe below.
+
+### Recipe (any source organism)
+
+Assume a source proteome `source.faa` with GFF3 `source.gff3`, and a target
+species proteome `species.faa`.
+
+1. Build a BLAST database for the target species:
+
+   ```bash
+   makeblastdb -in species.faa -dbtype prot -out species_db
+   ```
+
+2. BLAST the **source** proteins against it. The query must be the source
+   proteome, so `qseqid` matches the source GFF3 IDs that gene resolution
+   climbs from isoform to gene:
+
+   ```bash
+   blastp -query source.faa -db species_db -evalue 1e-5 -max_target_seqs 20 \
+          -outfmt 6 -out species_vs_source.tsv
+   ```
+
+3. Map, one run per species (the table is incremental, so repeat each species
+   against the same `--output`):
+
+   ```bash
+   crispytargets map --gff source.gff3 --blast-file species_vs_source.tsv \
+     --species <Name> --proteome species.faa --output orthologs.tsv
+   ```
+
+   `--proteome` adds `{Species}_symbol` (gene symbol from the FASTA `GN=` field)
+   and `{Species}_uniq` (`<symbol>-<gene_id>`). Omit it if you only want the
+   UniProt entry names.
+
+4. Optional: if a carried-over ID column is isoform-level, collapse it to gene
+   level and deduplicate:
+
+   ```bash
+   crispytargets clean-mapping -i orthologs.tsv -o orthologs.tsv -c "<col>,<col2>"
+   ```
+
+### Worked example: Ciona robusta (this project's data)
+
+Source = the **KY21** assembly (the gold-standard build). KY19 and KH2013 are
+older Ciona builds of the same species.
+
+Data provenance — download separately, not committed:
+
+| Input | Source |
+|-------|--------|
+| Ciona GFF3, genome, and KY21 + KY19 proteins (the `HT.*` files) | GHOST — <https://ghost.zool.kyoto-u.ac.jp/download_ht.html> |
+| Human / mouse proteomes | UniProt reviewed (Swiss-Prot) FASTA |
+| BLAST results | `blastp -outfmt 6`, KY21 protein as query vs the species proteome |
+
+Mapping to an older build (KY19) is the same recipe: BLAST the KY21 proteins
+against the KY19 proteins (both from GHOST), run `map --species KY19`, then
+`clean-mapping` on the KY19 columns. Because KY21 is the better assembly,
+several KY21 genes collapsing onto one KY19 gene is expected — the older build
+merged recent duplicates that KY21 resolves.
+
+### Checking assignment confidence (reciprocal best hit)
+
+Validate any cross-build or cross-species assignment with reciprocal best hit:
+`blastp` in both directions and keep pairs that are mutual top hits. On the
+KY21→KY19 proteins this gave ~93% reciprocal best hits; the non-reciprocal
+remainder is dominated by recent duplicates (several KY21 genes → one KY19
+gene), which is expected rather than erroneous.

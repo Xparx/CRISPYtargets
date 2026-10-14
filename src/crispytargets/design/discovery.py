@@ -78,23 +78,3 @@ def discover_and_score(ff_jar, db, ref, outdir, targets_gr, args, gene_map):
                 verbose=getattr(args, 'verbose', False))
 
     return os.path.join(outdir, "targets.output.scored")
-
-
-def rescore_with_snps(ff_jar, db, outdir, args, snp_fasta):
-    """Re-run discovery and scoring on SNP-modified sequences.
-
-    Returns the path to the scored output, which the caller merges back
-    for guides that directly overlap SNPs.
-    """
-    logging.info("Running FlashFry on SNP-modified sequences...")
-    snp_output = os.path.join(outdir, 'targets_snp.output')
-    snp_scored = os.path.join(outdir, 'targets_snp.output.scored')
-
-    run_command(f"java -Xmx{args.mem} -jar {ff_jar} discover --database {db} "
-                f"--fasta {snp_fasta} --positionOutput --output {snp_output}",
-                verbose=getattr(args, 'verbose', False))
-    run_command(f"java -Xmx{args.mem} -jar {ff_jar} score --input {snp_output} "
-                f"--output {snp_scored} --database {db} --scoringMetrics={args.metrics}",
-                verbose=getattr(args, 'verbose', False))
-
-    return snp_scored

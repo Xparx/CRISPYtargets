@@ -2,7 +2,7 @@
 
 * Startup files
 
-/add project.org
+project.org
 roles.org
 RULES.org
 README.md

@@ -46,21 +46,22 @@ def _nucleotide_features(seq, order):
 def _featurize_guide(guide_20bp, flank_5prime=None, flank_3prime=None, pam_seq=None):
     """Extract 627 features from a 20bp guide sequence.
 
-    Constructs a 30mer: 5bp 5' flank + 20bp guide + PAM + 2bp 3' flank.
-    Uses actual PAM and flanking sequences when provided.
-    The model was trained on 30mers with the guide at positions 5-24.
+    Builds the Azimuth / Doench 2016 30mer: 4bp 5' flank + 20bp guide +
+    3bp PAM + 3bp 3' flank, so the guide sits at offset 4..23 and the PAM
+    at 24..26. Feature slices (GC from s[4:24], NGGX from s[24]+s[27], Tm
+    segments) follow Azimuth exactly.
     """
     guide = guide_20bp.upper().replace('U', 'T')
     pam = pam_seq.upper() if pam_seq else 'NGG'
-    left = flank_5prime[-5:] if flank_5prime and len(flank_5prime) >= 5 else 'N' * 5
-    right = flank_3prime[:2] if flank_3prime and len(flank_3prime) >= 2 else 'N' * 2
+    left = flank_5prime[-4:] if flank_5prime and len(flank_5prime) >= 4 else 'N' * 4
+    right = flank_3prime[:3] if flank_3prime and len(flank_3prime) >= 3 else 'N' * 3
     s = left + guide + pam + right
     assert len(s) == 30
 
     pd1, pi1 = _nucleotide_features(s, 1)
     pd2, pi2 = _nucleotide_features(s, 2)
 
-    guide = s[5:25]
+    guide = s[4:24]
     gc = sum(1 for c in guide if c in 'GC')
     gc_feat = np.array([1 if gc > 10 else 0, 1 if gc < 10 else 0, gc])
 

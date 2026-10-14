@@ -28,13 +28,13 @@ Using `pyfaidx`, the pipeline extracts the actual DNA sequences from the referen
 The pipeline wraps the FlashFry Java JAR to perform three main tasks:
 1.  **Indexing**: Creates a genomic database for fast off-target searching.
 2.  **Discovery**: Finds all possible sgRNA targets within the extracted sequences.
-3.  **Scoring**: Applies metrics (default: `doench2014ontarget`) to predict guide efficiency.
+3.  **Scoring**: Applies the `--metrics` list (default: `hsu2013`, the MIT/Hsu off-target specificity score; `otCount` is always emitted alongside). On-target efficiency metrics from FlashFry are opt-in, since our own RS2/RS3 provide those.
 
 ### 4. Post-Processing & Ranking (`post_process`)
 This is where the raw FlashFry data is refined:
 *   **Accessibility**: If an "accessome" BED file is provided, it calculates the overlap between the target and open chromatin regions.
 *   **SNP Entropy**: If a SNP BED file is provided (from the `crispytargets lift` tool), each overlapping SNP is converted to its **IUPAC ambiguity code** (e.g., A/G → R, C/T → Y). These codes replace bases in the guide sequence, and Shannon entropy is calculated per guide. Guides at polymorphic sites receive higher entropy scores and rank lower. Individual SNP positions are annotated in the `snp_overlaps` column.
-*   **SNP Re-scoring** (optional): If `--rescore-snps` is enabled, FlashFry is re-run on SNP-modified sequences for guides that directly overlap SNPs. Results appear in `{metric}_snp` columns alongside reference scores, allowing direct comparison of reference vs. variant guide performance.
+*   **SNP Re-scoring** (optional): If `--rescore-snps` is enabled, guides that overlap known SNPs are re-scored with Doench 2016 (RS2) and, with `--rs3`, Rule Set 3, using the concrete variant (ALT) allele at each SNP position and the guide's real flanks and PAM. For each guide this yields three variant scores, `avg1snp` (mean over single-SNP variants, the population-average effect), `worst1snp` (most damaging single variant, the carrier worst case), and `allsnps` (every overlapping SNP substituted at once), each reported as a raw score and as a delta versus the reference score. The minimum distance from a SNP to the PAM (`snp_pam_dist`) and to the cut site (`snp_cut_dist`) is also reported. Unlike the reference scores, these come from our own scorers, so they are directly comparable to `Doench2016OnTarget` and `RuleSet3`.
 *   **Oligo Design**: Generates forward and reverse primer sequences for the guides, including a 'G' prefix for T7 promoter efficiency and specific overhangs (`agat` / `aaac`).
 *   **Final Ranking**: Sorts guides based on a hierarchy: `Cutoff` $\rightarrow$ `Doench Score` $\rightarrow$ `Accessibility` $\rightarrow$ `Entropy`.
 
@@ -99,7 +99,7 @@ promoter_upstream: 1107
 promoter_downstream: 107
 cutoff: 0.6
 mem: "16g"
-metrics: "doench2014ontarget"
+metrics: "hsu2013"
 ```
 Run the pipeline with:
 ```bash
@@ -119,7 +119,7 @@ crispytargets design \
     --promoter-downstream 100 \
     --cutoff 0.6 \
     --mem 16g \
-    --metrics doench2014ontarget,mitchell2018
+    --metrics hsu2013,doench2014ontarget,moreno2015
 ```
 
 #### Argument Breakdown:
@@ -137,8 +137,9 @@ crispytargets design \
 | `--promoter-downstream` | No | Distance downstream of TSS for promoter window (Default: 107). |
 | `--cutoff` | No | Minimum Doench score to be considered "over cutoff" (Default: 0.65). |
 | `--mem` | No | Memory allocated to the Java VM (Default: 8g). |
-| `--metrics` | No | Comma-separated FlashFry scoring metrics. |
-| `--rescore-snps` | No | Re-run FlashFry scoring on SNP-modified sequences |
+| `--metrics` | No | Comma-separated FlashFry scoring metrics (Default: `hsu2013`). On-target metrics (`doench2014ontarget`, `doench2016cfd`, `moreno2015`, ...) are opt-in and are written as trailing columns of `final_sgrnas.tsv`. |
+| `--rescore-snps` | No | Re-score SNP-overlapping guides with RS2/RS3 variant sequences (avg/worst single-SNP and all-SNP scores plus deltas) |
+| `--strict` | No | Write only guides over `--cutoff` to `final_sgrnas.tsv` (default keeps all guides, ranked, with `over_cutoff` flag) |
 | `--browser-bed` | No | Output BED file for genome browser visualization |
 | `--verbose` | No | Show FlashFry Java output (suppressed by default) |
 
@@ -169,24 +170,32 @@ While both arguments take a BED file as input, they serve completely different p
 | `targets.output.scored` | Raw scored output from FlashFry |
 | **`final_sgrnas.tsv`** | Final ranked list with scores, annotations, and oligos |
 | `final_sgrnas.bed` | Genome browser BED file (with `--browser-bed`) |
-| `targets_snp.fasta` | SNP-modified sequences (with `--rescore-snps`) |
-| `targets_snp.output.scored` | Scored output with SNP variants (with `--rescore-snps`) |
+| `design.log` | Per-run log: executed commands with timestamps, plus a final line with stage timings (prepare targets, FlashFry, post-process, total) |
 
 ### Key Columns in `final_sgrnas.tsv`
 
+Columns are grouped so related scores sit next to each other, in this order:
+
+| # | Column(s) | Description |
+|---|-----------|-------------|
+| 1-3 | `gene_id`, `feature`, `over_cutoff` | Identity: resolved root gene ID, feature type (exon, CDS, promoter), passes the Doench cutoff |
+| 4-10 | `Chromosome`, `Start`, `End`, `Strand`, `start`, `stop`, `contig` | Coordinates: gene location plus the guide's position within it |
+| 11-15 | `Doench2016OnTarget`, `RuleSet3`, `Hsu2013`, `otCount`, `accessibility` | Reference scores: our on-target scores (RS2, RS3), the default off-target metrics from FlashFry, and open-chromatin overlap |
+| 16-21 | `target`, `context`, `orientation`, `overflow`, `fwd`, `rev` | Guide sequence: 23bp guide + PAM, flanking context, strand, and the designed oligos |
+| 22-26 | `num_snps`, `snp_overlaps`, `entropy`, `snp_pam_dist`, `snp_cut_dist` | SNP annotation, grouped with the variant scores below because both are absent when no SNP data is given |
+| 27-38 | `Doench2016OnTarget_avg1snp` / `_worst1snp` / `_allsnps` + `Doench2016_delta_avg` / `_worst` / `_all`, then the same six for `RuleSet3` | Variant scores (only with `--rescore-snps`, RS3 columns need `--rs3`): raw variant scores plus deltas versus the reference score (variant minus reference; positive = improvement) |
+| trailing | any further `--metrics` column, e.g. `Doench2014OnTarget` | FlashFry on-target scores, written last as pass-through whenever requested via `--metrics` |
+
+Notes on individual columns:
+
 | Column | Description |
 |--------|-------------|
-| `gene_id` | Resolved root gene ID from GFF3 (first column) |
-| `feature` | Feature type (exon, CDS, promoter) |
-| `Chromosome`, `Start`, `End`, `Strand` | Genomic coordinates |
-| `target` | 23bp guide + PAM sequence |
-| `Doench2014OnTarget` | On-target efficiency score (reference) |
 | `entropy` | Shannon entropy based on overlapping SNPs (higher = more polymorphic) |
 | `snp_overlaps` | List of overlapping SNPs (e.g., `5:A>G\|12:C>T`) |
-| `num_snps` | Number of overlapping SNPs |
-| `{metric}_snp` | Re-scored metric with SNP variants (only if `--rescore-snps`) |
-| `fwd`, `rev` | Designed oligos for cloning |
-| `over_cutoff` | Whether guide passes the Doench cutoff |
+| `snp_pam_dist` | Min distance from a SNP to the PAM boundary (positive = in guide, <=0 = inside PAM) |
+| `snp_cut_dist` | Min distance from a SNP to the cut site (between guide positions 17/18) |
+| `Hsu2013` | MIT/Hsu off-target specificity score from FlashFry (0-100, higher = more specific; default `--metrics`) |
+| `otCount` | Number of off-target hits found by FlashFry (always written) |
 
 ### Genome Browser Visualization
 
@@ -208,11 +217,13 @@ The pipeline computes two on-target efficiency scores: **Doench 2016 (Rule Set 2
 
 Pure numpy GradientBoostingRegressor (100 trees, lr=0.1, max_depth=3) using 627 features extracted from each 30mer context sequence. No sklearn dependency -- prediction is pure numpy tree traversal.
 
+The 30mer uses the Azimuth layout: **4bp 5' flank + 20bp guide + 3bp PAM + 3bp 3' flank**, so the guide sits at offset 4..23 and the PAM at 24..26. Feature slices (GC from `s[4:24]`, NGGX from `s[24]+s[27]`, Tm segments) follow Azimuth's `featurization.py` exactly.
+
 | Column | Scale | Description |
 |--------|-------|-------------|
 | `Doench2016OnTarget` | 0 to 1 | On-target efficiency score (higher = better) |
 
-The model (`doench2016_model.json`) was extracted from the azimuth package bundled with CRISPOR. Scores may differ from the CRISPOR website by ~10 points on average, as the production server appears to use a different model than what is distributed in the repository.
+The model (`doench2016_model.json`) is a **retrain**: a GradientBoostingRegressor fit from scratch on Azimuth's `FC_plus_RES_withPredictions.csv` training data (see `tools/train_doench2016.py`), converted to pure-numpy JSON. It is *not* the production Azimuth V3 model, so scores differ from the CRISPOR website by ~9-10 points on average. Exact CRISPOR `fusi` reproduction requires the original `V3_model_nopos.pickle`, which needs scikit-learn 1.0.x to unpickle (see `reproduce_crispor.py` for a reference attempt).
 
 #### Rule Set 3 (`rs3score.py`)
 
@@ -223,6 +234,8 @@ LightGBM model (2,279 trees) from the [GPP/rs3](https://github.com/gpp-rnd/rs3) 
 | `RuleSet3` | unbounded | On-target efficiency score (higher = better) |
 
 Enable with `--rs3` flag. Spearman correlation with Doench 2016: ~0.72.
+
+The 30mers fed to RS3 use the same Azimuth layout (4+20+3+3, guide at offset 4), matching what CRISPOR feeds its `rs3` column, so these scores reproduce the CRISPOR "Doench-RuleSet3" column. The model itself is the genuine published Rule Set 3, converted faithfully from `gpp-rnd/rs3`'s `RuleSet3.pkl`.
 
 #### Setup for RS3
 
@@ -238,9 +251,9 @@ python tools/convert_rs3_model.py --rs3-dir ~/projects/src/rs3
 
 | Column | Description |
 |--------|-------------|
-| `Doench2014OnTarget` | On-target score from FlashFry (Rule Set 1, deprecated) |
 | `Doench2016OnTarget` | On-target score from Doench 2016 (Rule Set 2) |
 | `RuleSet3` | On-target score from Rule Set 3 (requires `--rs3`) |
+| `Doench2014OnTarget` | On-target score from FlashFry (Rule Set 1), only when requested via `--metrics`; written as a trailing column |
 
 Ranking uses: cutoff -> Doench 2016 -> Rule Set 3 -> accessibility -> entropy.
 

@@ -95,23 +95,3 @@ def parse_flashfry_contig(contig_str):
         return None, None, None, None, None, None
 
 
-def convert_output_to_igv_bed(input_file):
-    from pathlib import Path
-
-    input_file = Path(input_file)
-    # Load the final results
-    df = pd.read_csv(input_file, sep='\t')
-
-    # BED format requires: Chromosome, Start, End, Name, Score, Strand
-    # We will use 'gene_id' as the name and 'Doench2014OnTarget' as the score
-    df['abs_start'] = df['Start'] + df['start']
-    df['abs_end'] = df['Start'] + df['stop']
-
-    bed_df = df[df['over_cutoff']][['Chromosome', 'abs_start', 'abs_end', 'feature', 'Doench2014OnTarget', 'Strand']]
-    bed_df.columns = ['chrom', 'start', 'end', 'name', 'score', 'strand']
-    bed_df = bed_df.drop_duplicates() # (subset=['chrom', 'start', 'end', 'name'])
-
-    out_file = input_file.parent / (input_file.stem + '.bed')
-    # Save as BED
-    bed_df.to_csv(out_file, sep='\t', index=False, header=False)
-    print(f"Converted {input_file.name} to {out_file.name}")

@@ -80,11 +80,11 @@ def expected_score(seq, start, strand):
     if strand == "+":
         guide, pam = fwd23[:20], fwd23[20:23]
         flank5 = fwd23 and seq[start - 5:start]
-        flank3 = seq[start + 23:start + 25]
+        flank3 = seq[start + 23:start + 26]
     else:
         guide, pam = revcomp(fwd23[3:23]), revcomp(fwd23[0:3])
         flank5 = revcomp(seq[start + 23:start + 28])
-        flank3 = revcomp(seq[start - 2:start])
+        flank3 = revcomp(seq[start - 3:start])
     return float(doench2016.score_guides([guide], flanks=[(flank5, flank3)], pams=[pam])[0])
 
 
