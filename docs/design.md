@@ -32,9 +32,9 @@ The pipeline wraps the FlashFry Java JAR to perform three main tasks:
 
 ### 4. Post-Processing & Ranking (`post_process`)
 This is where the raw FlashFry data is refined:
-*   **Accessibility**: If an "accessome" BED file is provided, it calculates the overlap between the target and open chromatin regions.
-*   **SNP Entropy**: If a SNP BED file is provided (from the `crispytargets lift` tool), each overlapping SNP is converted to its **IUPAC ambiguity code** (e.g., A/G → R, C/T → Y). These codes replace bases in the guide sequence, and Shannon entropy is calculated per guide. Guides at polymorphic sites receive higher entropy scores and rank lower. Individual SNP positions are annotated in the `snp_overlaps` column.
-*   **SNP Re-scoring** (optional): If `--rescore-snps` is enabled, guides that overlap known SNPs are re-scored with Doench 2016 (RS2) and, with `--rs3`, Rule Set 3, using the concrete variant (ALT) allele at each SNP position and the guide's real flanks and PAM. For each guide this yields three variant scores, `avg1snp` (mean over single-SNP variants, the population-average effect), `worst1snp` (most damaging single variant, the carrier worst case), and `allsnps` (every overlapping SNP substituted at once), each reported as a raw score and as a delta versus the reference score. The minimum distance from a SNP to the PAM (`snp_pam_dist`) and to the cut site (`snp_cut_dist`) is also reported. Unlike the reference scores, these come from our own scorers, so they are directly comparable to `Doench2016OnTarget` and `RuleSet3`.
+*   **Accessibility**: If an "accessome" BED file is provided, it calculates the overlap between the guide's own 23bp window and open chromatin regions.
+*   **SNP Entropy**: If a SNP BED file is provided (from the `crispytargets lift` tool), a SNP is assigned to a guide only when it falls inside that guide's 23bp window (computed in the guide's own orientation, so a guide inside a large exon is not credited with SNPs elsewhere in the exon). Each overlapping SNP is converted to its **IUPAC ambiguity code** (e.g., A/G → R, C/T → Y). These codes replace bases in the guide sequence, and Shannon entropy is calculated per guide. Guides at polymorphic sites receive higher entropy scores and rank lower. Individual SNP positions are annotated in the `snp_overlaps` column, together with the minimum distance from a SNP to the PAM (`snp_pam_dist`, positive = in guide, <=0 = inside PAM) and to the cut site (`snp_cut_dist`). These annotations need only `--snps`, no scoring.
+*   **SNP Re-scoring** (optional): If `--rescore-snps` is enabled, guides that overlap known SNPs are re-scored with Doench 2016 (RS2) and, with `--rs3`, Rule Set 3, using the concrete variant (ALT) allele at each SNP position and the guide's real flanks and PAM. For each guide this yields three variant scores, `avg1snp` (mean over single-SNP variants, the population-average effect), `worst1snp` (most damaging single variant, the carrier worst case), and `allsnps` (every overlapping SNP substituted at once), each reported as a raw score and as a delta versus the reference score. Unlike the reference scores, these come from our own scorers, so they are directly comparable to `Doench2016OnTarget` and `RuleSet3`.
 *   **Oligo Design**: Generates forward and reverse primer sequences for the guides, including a 'G' prefix for T7 promoter efficiency and specific overhangs (`agat` / `aaac`).
 *   **Final Ranking**: Sorts guides based on a hierarchy: `Cutoff` $\rightarrow$ `Doench Score` $\rightarrow$ `Accessibility` $\rightarrow$ `Entropy`.
 
@@ -131,14 +131,14 @@ crispytargets design \
 | `--genes` | No | CSV containing a `Gene.ID` column to limit targets to specific genes. |
 | `--filter-bed` | No | BED file used to strictly limit the search space to specific genomic regions. |
 | `--accessome`| No | BED file of accessible regions to prioritize "open" DNA in the final ranking. |
-| `--snps` | No | BED file of SNPs to calculate sequence entropy. |
+| `--snps` | No | BED file of SNPs; gives `num_snps`, `snp_overlaps`, `entropy`, `snp_pam_dist` and `snp_cut_dist`. |
 | `--tss-features` | No | Comma-separated list of GFF3 features to use as TSS anchors. |
 | `--promoter-upstream` | No | Distance upstream of TSS for promoter window (Default: 1107). |
 | `--promoter-downstream` | No | Distance downstream of TSS for promoter window (Default: 107). |
 | `--cutoff` | No | Minimum Doench score to be considered "over cutoff" (Default: 0.65). |
 | `--mem` | No | Memory allocated to the Java VM (Default: 8g). |
 | `--metrics` | No | Comma-separated FlashFry scoring metrics (Default: `hsu2013`). On-target metrics (`doench2014ontarget`, `doench2016cfd`, `moreno2015`, ...) are opt-in and are written as trailing columns of `final_sgrnas.tsv`. |
-| `--rescore-snps` | No | Re-score SNP-overlapping guides with RS2/RS3 variant sequences (avg/worst single-SNP and all-SNP scores plus deltas) |
+| `--rescore-snps` | No | Add RS2/RS3 variant scores for SNP-overlapping guides (avg/worst single-SNP and all-SNP scores plus deltas). This is the expensive step; SNP annotation needs only `--snps`. |
 | `--strict` | No | Write only guides over `--cutoff` to `final_sgrnas.tsv` (default keeps all guides, ranked, with `over_cutoff` flag) |
 | `--browser-bed` | No | Output BED file for genome browser visualization |
 | `--verbose` | No | Show FlashFry Java output (suppressed by default) |
@@ -191,6 +191,7 @@ Notes on individual columns:
 | Column | Description |
 |--------|-------------|
 | `entropy` | Shannon entropy based on overlapping SNPs (higher = more polymorphic) |
+| `Strand`, `orientation` | `Strand` is the target region's strand from the GFF3; `orientation` is the guide's own strand (FWD/RVS). Window overlaps, flanks, variant alleles and the browser BED all follow `orientation` |
 | `snp_overlaps` | List of overlapping SNPs (e.g., `5:A>G\|12:C>T`) |
 | `snp_pam_dist` | Min distance from a SNP to the PAM boundary (positive = in guide, <=0 = inside PAM) |
 | `snp_cut_dist` | Min distance from a SNP to the cut site (between guide positions 17/18) |

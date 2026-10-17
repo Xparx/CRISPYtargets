@@ -266,7 +266,24 @@ class CrispyPipeline:
         parsed_coords = df['contig'].apply(parse_flashfry_contig)
         # Unpack 6 values: gene_id, feature, Chromosome, Start, End, Strand
         df[['gene_id', 'feature', 'Chromosome', 'Start', 'End', 'Strand']] = pd.DataFrame(parsed_coords.tolist(), index=df.index)
-        target_gr = pr.PyRanges(df[['Chromosome', 'Start', 'End', 'Strand']])
+        # Start/End are the target REGION's span and Strand the region's strand,
+        # but every downstream overlap must use the GUIDE's own window and strand.
+        # extract_sequences writes genome[Start:End] forward for both strands, and
+        # FlashFry's start/stop are offsets along that sequence, so the guide sits
+        # at [Start+start, Start+stop) on the forward genome, and its genomic
+        # strand is its FWD/RVS orientation (not the region's strand).
+        win_start = df['Start'].astype(int) + df['start'].astype(int)
+        win_end = df['Start'].astype(int) + df['stop'].astype(int)
+        guide_strand = np.where(df['orientation'].values == 'RVS', '-', '+')
+        # orig_idx is carried as a COLUMN: PyRanges reorders .df and renumbers
+        # the index when strands are mixed, so row identity must travel as data.
+        target_gr = pr.PyRanges(pd.DataFrame({
+            'Chromosome': df['Chromosome'].values,
+            'Start': win_start.values,
+            'End': win_end.values,
+            'Strand': guide_strand,
+            'orig_idx': np.arange(len(df)),
+        }))
 
         # 1. Accessibility (Optional)
         df['accessibility'] = 0
@@ -276,9 +293,8 @@ class CrispyPipeline:
             if acc_gr.df.shape[1] < 3:
                 raise ValueError(f"Accessome BED {self.args.accessome} is malformed. Expected at least 3 columns (Chrom, Start, End).")
 
-            # Preserve original index to map back to df
-            target_gr_indexed = target_gr.assign(orig_idx=target_gr.df.index)
-            joined = target_gr_indexed.join(acc_gr)
+            # orig_idx already rides in target_gr as a column (see construction)
+            joined = target_gr.join(acc_gr)
 
             # Calculate total overlap length (bp) per target
             # joined.df['End'] and joined.df['Start'] are the intersection coordinates
@@ -338,8 +354,11 @@ class CrispyPipeline:
             right = str(genome[chrom][right_start:right_start + 3].seq) if right_start + 3 <= len(genome[chrom]) else None
             return left, right
 
-        guide_starts = (df['Start'].astype(int) + df['start'].astype(int)).values
-        strands = df['Strand'].values
+        guide_starts = win_start.values
+        # Flanks are taken in the guide's own orientation, so the branch point is
+        # the guide's genomic strand (FWD/RVS), never the region's strand: a guide
+        # inside a '+' region can face either way.
+        strands = guide_strand
         chroms = df['Chromosome'].values
         flanks = [get_flank(c, g, s) for c, g, s in zip(chroms, guide_starts, strands)]
 
@@ -383,9 +402,10 @@ class CrispyPipeline:
                 raise ValueError(f"SNP BED {self.args.snps} is malformed. Expected at least 3 columns (Chrom, Start, End).")
 
             # Build overlap table using per-chromosome binary search
-            # (avoids OOM from pandas merge cross-product)
+            # (avoids OOM from pandas merge cross-product). orig_idx is already a
+            # column on target_gr: PyRanges reorders .df and renumbers the index,
+            # so row identity must never be read back from the index.
             target_df = target_gr.df.copy()
-            target_df['orig_idx'] = target_df.index
 
             snp_df = snp_gr.df.copy()
             snp_name_col = 'Name' if 'Name' in snp_df.columns else 'name'
@@ -451,6 +471,8 @@ class CrispyPipeline:
             entropy_results = {}
             snp_annotations = {}
             snp_variant_info = {}
+            pam_dist = {}
+            cut_dist = {}
 
             for idx, group in grouped:
                 # Get original sequence
@@ -459,9 +481,11 @@ class CrispyPipeline:
                 
                 overlaps = []
                 variants = []
+                rels = []
                 for row in group.itertuples():
                     if 0 <= row.rel_pos < seq_len:
                         seq_list[row.rel_pos] = row.snp_code
+                        rels.append(int(row.rel_pos))
                         overlaps.append(f"{row.rel_pos}:{row.Name}>{row.snp_code_orig}")
                         if row.alt_allele:
                             variants.append((int(row.rel_pos), row.alt_allele, str(row.Name)))
@@ -469,16 +493,24 @@ class CrispyPipeline:
                 entropy_results[idx] = calculate_entropy(seq_list)
                 snp_annotations[idx] = '|'.join(overlaps) if overlaps else '.'
                 snp_variant_info[idx] = variants
+                # Per-guide SNP distances, reported whenever --snps is given (they
+                # need no scoring): nearest SNP to the PAM boundary (guide pos 20,
+                # <=0 inside the PAM) and to the cut site (between guide 17/18).
+                if rels:
+                    pam_dist[idx] = min(20 - rp for rp in rels)
+                    cut_dist[idx] = min(abs(rp - 17) for rp in rels)
 
             # Map results back to the main dataframe
             df['entropy'] = df.index.map(entropy_results).fillna(0.0)
             df['snp_overlaps'] = df.index.map(snp_annotations).fillna('.')
             df['num_snps'] = df['snp_overlaps'].apply(lambda x: 0 if x == '.' else x.count('|') + 1)
+            df['snp_pam_dist'] = df.index.map(pam_dist).astype('Int64')
+            df['snp_cut_dist'] = df.index.map(cut_dist).astype('Int64')
 
             # Re-score guides that overlap SNPs (if requested): compute RS2/RS3 on
             # variant sequences (concrete ALT allele, real flanks, real PAM) and
-            # report per-guide avg/worst single-SNP and all-SNP scores, deltas vs
-            # reference, and the min distance from a SNP to the PAM and cut site.
+            # report per-guide avg/worst single-SNP and all-SNP scores plus deltas
+            # vs the reference score. The cheap annotation above needs none of this.
             if getattr(self.args, 'rescore_snps', False) and snp_variant_info:
                 rs3_fn = None
                 if 'RuleSet3' in df.columns:
@@ -509,10 +541,6 @@ class CrispyPipeline:
                         'Doench2016_delta_avg': float(np.mean(rs2s)) - ref_rs2,
                         'Doench2016_delta_worst': float(np.min(rs2s)) - ref_rs2,
                         'Doench2016_delta_all': all_rs2 - ref_rs2,
-                        # distance from SNP to PAM boundary (23-mer pos 20): >0 in
-                        # guide, <=0 inside PAM. Cut site is between guide 17/18.
-                        'snp_pam_dist': int(min(20 - rp for rp, _, _ in variants)),
-                        'snp_cut_dist': int(min(abs(rp - 17) for rp, _, _ in variants)),
                     }
                     if rs3_fn is not None and not np.isnan(ref_rs3):
                         row.update({
@@ -645,7 +673,8 @@ class CrispyPipeline:
                 chrom = row['Chromosome']
                 abs_start = int(row['Start']) + int(row['start'])
                 abs_end = int(row['Start']) + int(row['stop'])
-                strand = row.get('Strand', '.')
+                # The guide's own strand (its FWD/RVS orientation), not the region's
+                strand = '-' if row.get('orientation') == 'RVS' else '+'
                 gene = row.get('gene_id', '.')
                 seq = row.get('target', '.')
                 n_snps = int(row.get('num_snps', 0))
@@ -704,7 +733,7 @@ def main():
     parser.add_argument("--gff", default=config.get('gff'), required=not config.get('gff'), help="Reference GFF file")
     parser.add_argument("--ref", default=config.get('ref'), required=not config.get('ref'), help="Reference genome FASTA")
     parser.add_argument("--accessome", required=False, default=config.get('accessome'), help="accessome.bed file (optional)")
-    parser.add_argument("--snps", default=config.get('snps'), help="Optional SNP bed file")
+    parser.add_argument("--snps", default=config.get('snps'), help="Optional SNP bed file; gives num_snps, snp_overlaps, entropy, snp_pam_dist and snp_cut_dist")
     parser.add_argument("--filter-bed", default=config.get('filter_bed'), help="Optional region filter bed file")
     parser.add_argument("--tss-features", type=str, default=config.get('tss_features', "transcript,mRNA,noncoding_transcript,lncRNA,sRNA,tRNA,rRNA"), help="Comma-separated list of GFF3 features to use as anchors for the TSS; promoter regions are then calculated upstream of these anchors (default: transcript,mRNA,noncoding_transcript,lncRNA,sRNA,tRNA,rRNA)")
     parser.add_argument("--promoter-upstream", type=int, default=config.get('promoter_upstream', 1107), help="Distance upstream of TSS to include in promoter region (default: 1107)")
@@ -714,7 +743,7 @@ def main():
     parser.add_argument("--pam-len", type=int, default=config.get('pam_len', 3), help="Expected PAM length (default 3)")
     parser.add_argument("--mem", type=str, default=config.get('mem', "8g"), help="Memory limit for FlashFry (e.g., 4g, 8g, 16g)")
     parser.add_argument("--metrics", type=str, default=config.get('metrics', "hsu2013"), help="FlashFry scoring metrics, comma-separated (default: hsu2013, the off-target specificity score; add on-target metrics such as doench2014ontarget to request them, they land as trailing columns)")
-    parser.add_argument("--rescore-snps", action="store_true", help="Re-score SNP-overlapping guides with RS2/RS3 variant sequences (avg/worst single-SNP and all-SNP scores plus deltas)")
+    parser.add_argument("--rescore-snps", action="store_true", help="Add RS2/RS3 variant scores for SNP-overlapping guides (avg/worst single-SNP and all-SNP scores plus deltas); the expensive step, SNP annotation needs only --snps")
     parser.add_argument("--strict", action="store_true",
                         help="Write only guides over --cutoff to final_sgrnas.tsv (default: keep all, ranked)")
     parser.add_argument("--rs3", action="store_true",
