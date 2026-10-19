@@ -136,6 +136,13 @@ crispytargets design \
 
 ## Detailed documentation
 
+- [docs/tutorial_design.md](docs/tutorial_design.md),
+  [docs/tutorial_snps.md](docs/tutorial_snps.md),
+  [docs/tutorial_mapping.md](docs/tutorial_mapping.md) — start-to-finish
+  tutorials, each from downloads in your own working directory to one
+  deliverable (guide table, lifted SNP track, ortholog table)
+- [docs/provenance.md](docs/provenance.md) — checksums and the verification
+  log behind the Ciona worked example
 - [docs/design.md](docs/design.md) — target preparation, promoter windows,
   accessibility vs. hard filtering, output files and columns, Doench 2016
   Rule Set 2 and Rule Set 3 scoring details

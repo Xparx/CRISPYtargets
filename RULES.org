@@ -73,6 +73,48 @@ attributes or return values.
 - *Data Cost Minimization*: Do not densify sparse data at any
   point unless it is absolutely required.
 
+* Root and User Installs Need Strict Permission
+
+Never create or install Python packages in the root or user space
+(system site-packages, =~/.local=, =sudo pip=, =pip install --user=)
+without strict, explicit permission for that install. Default work
+runs in a virtual or project-local environment; any install that
+would reach a shared environment is requested first, with the
+target stated.
+
+* Process Concurrency Bound
+
+These rules cap how much work a session fans out at once. Tool
+calls count as jobs: file reads, shell commands, and find, grep,
+or glob searches are limited the same way spawned processes are.
+
+** The Bound
+
+Never launch more than 10 jobs in one go. A job is any tool call
+or spawned process: a file read, a shell command, a find, grep,
+or glob search, a parallel tool call, a background job. When in
+doubt, it counts.
+
+** Wait Before Starting More
+
+When the bound is reached, wait for every in-flight job to
+finish before starting the next batch. Never accumulate
+background jobs, queued reads, or extra shells as a substitute
+for waiting.
+
+** Search Once, Read What It Points To
+
+Locate before you read: one search over the full scope (one
+recursive grep, one glob) instead of many narrow finds or
+per-file probes. Read only files the search points at, and never
+re-read a file already in context.
+
+** Fan Out Through Bounded Tools
+
+Work past the bound runs through one bounded mechanism
+(=xargs -P=, =make -j=, GNU parallel) with its own parallelism
+capped at 10, never one tool call or process per job.
+
 * Data Format Rules
 
 These rules govern file formats used when saving tabular data.
@@ -122,6 +164,15 @@ technical detail that is absolutely necessary to understand the
 point and act on it; everything else waits until the user asks.
 Lead with conclusions, status, and next steps. The user can
 always request more detail, so do not front-load it.
+
+** Follow Rules, Do Not Recite Them
+
+Rules are followed, not quoted. Never regurgitate, cite, or hint
+at rules in responses: no "per RULES.org", no summaries of the
+rules being applied, no reminders about them. The user sees the
+result of the rules, not the rules themselves. Explain reasoning
+when asked, but never preemptively advertise which rule drove a
+decision.
 
 * Document Integrity Rules
 

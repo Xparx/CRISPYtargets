@@ -362,8 +362,8 @@ crispytargets lift \
 
 | File | Description |
 |------|-------------|
-| `Ghost_SNPs_main_lifted.vcf.gz` | Lifted VCF with new-genome coordinates |
-| `Ghost_SNPs_main_lifted.bed` | BED file for the design pipeline's `--snps` argument |
+| `Ghost_SNPs_main.vcf_lifted.vcf.gz` | Lifted VCF with new-genome coordinates (named after the input VCF) |
+| `Ghost_SNPs_main.bed_lifted.bed` | BED file for the design pipeline's `--snps` argument |
 
 The BED file format (6 columns):
 
