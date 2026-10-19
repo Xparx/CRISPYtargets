@@ -174,3 +174,4 @@ This pipeline uses software and models from the following sources:
 - **LightGBM** — Gradient boosting framework used for Rule Set 3 inference.
 - **CRISPOR** — Haeussler et al. *Nucleic Acids Research*, 2018. [doi:10.1093/nar/gky406](https://doi.org/10.1093/nar/gky406). Model files sourced from the [crisporWebsite](https://github.com/maximilianh/crisporWebsite) repository.
 - **BioPython** — Cock et al. *Bioinformatics*, 2009. [doi:10.1093/bioinformatics/btp163](https://doi.org/10.1093/bioinformatics/btp163). Used for melting temperature calculations (Tm_NN).
+- **CRISPRtargets** — [ChristiaenLab/CRISPRtargets](https://github.com/ChristiaenLab/CRISPRtargets). This project was originally a Python port of it.
