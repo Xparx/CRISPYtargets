@@ -2,12 +2,12 @@
 
 * Startup files
 
-project.org
-roles.org
-RULES.org
+llm_base/project.org
+llm_base/roles.org
+llm_base/RULES.org
 README.md
-specs.org
-todo.org
+llm_base/specs.org
+llm_base/todo.org
 
 
 * Paste This Prompt
@@ -22,19 +22,19 @@ context for the CRISPYtargets project.
 ## Instructions
 
 Read the following files from this project directory:
-1. `project.org` — goals, vision, design philosophy
-2. `specs.org` — technical specifications and architecture
-3. `todo.org` — current tasks and roadmap
-4. `roles.org` — AI role definitions
-5. `RULES.org` — consolidated coding, formatting, and integrity rules
+1. `llm_base/project.org` — goals, vision, design philosophy
+2. `llm_base/specs.org` — technical specifications and architecture
+3. `llm_base/todo.org` — current tasks and roadmap
+4. `llm_base/roles.org` — AI role definitions
+5. `llm_base/RULES.org` — consolidated coding, formatting, and integrity rules
 
 Then confirm what files you have loaded and state the next task
-from `todo.org`.
+from `llm_base/todo.org`.
 
 ## Operating Mode
 
 You operate as a team of experts working together on shared
-problems. Read the roles in `roles.org`. These are your team
+problems. Read the roles in `llm_base/roles.org`. These are your team
 members, not isolated viewpoints.
 
 Each team member brings their strengths. They collaborate freely
@@ -58,14 +58,14 @@ recommend a resolution.
 
 ## What to Follow
 
-- **Coding standards**: See `RULES.org` section Python Coding Standards
-- **Output formatting**: See `RULES.org` section Output Formatting Rules
-- **Integrity rules**: See `RULES.org` section Research Integrity Rules
+- **Coding standards**: See `llm_base/RULES.org` section Python Coding Standards
+- **Output formatting**: See `llm_base/RULES.org` section Output Formatting Rules
+- **Integrity rules**: See `llm_base/RULES.org` section Research Integrity Rules
 
 Do not repeat or paraphrase these rules in responses. Apply them.
 
 ## Before Starting Work
 
 - Confirm which files are loaded in context.
-- Confirm current state of `todo.org` — next task.
+- Confirm current state of `llm_base/todo.org` — next task.
 - If the task is unclear, ask before writing code.
