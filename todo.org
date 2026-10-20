@@ -9,10 +9,9 @@
 ** DONE Hub entries
    - [X] README.org project entry
    - [X] hub todo.org task for pending workflow skills
-** TODO Write workflow skills in =.opencode/skills/=
-   Deferred until real workflows prove out. Template:
-   =template/.opencode/skills/WORKFLOW/SKILL.md= (lowercase kebab-case IDs,
-   one skill per task domain). Flip the README Opencode flag when done.
+** DONE Write workflow skills in =.opencode/skills/=
+   Completed 2026-10-19: =guide-design= and =variant-mapping=,
+   grounded in roles.org and the design/map/lift workflows.
 
 * Development
 ** DONE Test suite
