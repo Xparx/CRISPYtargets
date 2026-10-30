@@ -157,13 +157,16 @@ comma instead.
 
 ** Response Structure
 
-Large-scope responses (project-wide or phase-wide coverage,
-status summaries, initial replies to big questions) must be
-concise, brief, and light on technical detail. Provide only the
-technical detail that is absolutely necessary to understand the
-point and act on it; everything else waits until the user asks.
-Lead with conclusions, status, and next steps. The user can
-always request more detail, so do not front-load it.
+Foundational: minimal technical bullshit, clean and concise
+information. This applies to every reply, not only large-scope
+ones.
+
+- Lead with the answer, status, or next step.
+- Provide only the technical detail necessary to understand the
+  point and act on it. Mechanics (file lists, staging detail,
+  tool narration) stay out unless they change a decision.
+- Everything else waits until the user asks. Detail is always
+  available on request, so never front-load it.
 
 ** Follow Rules, Do Not Recite Them
 
@@ -173,6 +176,22 @@ rules being applied, no reminders about them. The user sees the
 result of the rules, not the rules themselves. Explain reasoning
 when asked, but never preemptively advertise which rule drove a
 decision.
+
+** Copy Blocks (Locate and Replace)
+
+When providing text for the user to paste into a file:
+
+- Metadata (file, location, anchor) goes in plain text outside
+  the fences; each fenced block holds only the lines that land
+  in the file.
+- Precede the paste block with the exact line it follows, or
+  the exact lines it replaces, so the spot is findable with a
+  text search.
+- Blocks contain whole lines only, wrapped to the target file's
+  line width.
+- End every block with an extra empty line: the pasted text
+  must carry its own trailing newline so it never merges with
+  the line that follows it in the file.
 
 * Document Integrity Rules
 
@@ -279,3 +298,53 @@ proposed before the change is accepted.
 - Installing the project must never risk downgrading packages
   already present in the user's environment; a downgrade only
   when warranted, with the reason stated
+
+* Commit Messages
+
+How commit messages are written and when commits are made.
+
+** Message Format
+
+- Subject line: imperative mood, one line, with a type prefix
+  where it fits (=docs:=, =feat:=, =fix:=, =chore:=).
+- Blank line, then body bullets describing what changed and why;
+  one bullet per file or concern.
+- Keep the subject readable in =git log --oneline=.
+- Trivial changes may be subject-only, but never skip the
+  trailer.
+
+** The Co-Authored-By Trailer
+
+Every commit ends with the trailer as its final line:
+
+=Co-Authored-By: <your model ID>=
+
+- Blank line between the last body line and the trailer.
+- Single line; the key is exactly =Co-Authored-By=.
+- The model states its own model ID as the value. If the ID is
+  unknown, say so when presenting the draft instead of guessing.
+
+** When Commits Happen
+
+- Commits are a separate, explicitly requested step: finish the
+  changes, present the draft message, and commit only when the
+  user says go. Never bundle a commit into another task.
+- Long-running jobs may carry a standing "commit as you go"
+  authorization; each message is still recorded and reported at
+  the end.
+- Reserved files (=AGENTS.md=, =RULES.org=, =roles.org=,
+  =STARTUP.org=, =opencode.jsonc=, =.opencode/commands/=) need
+  explicit per-commit go even under a standing authorization.
+
+** Branch Alignment
+
+- Never rebase, merge, fast-forward, reset, or otherwise move a
+  branch relative to main/master (or any shared branch) without
+  asking the user first.
+- Aggregating, squashing, or reordering commits is a history
+  rewrite: check whether the branch has diverged from
+  main/master, flag that a rebase or merge against main may
+  happen first, and ask which way to proceed before touching
+  anything.
+- Never rewrite commits already pushed to a shared branch
+  without asking.
