@@ -238,7 +238,6 @@ rewrite the definitions they operate under.
 Setup-written files that instruct or configure AI sessions:
 
 - =AGENTS.md= — opencode session startup
-- =STARTUP.org= — session startup and bootstrap prompt
 - =RULES.org= — consolidated rules
 - =roles.org= — AI role definitions
 - =opencode.jsonc= — permissions and session configuration
@@ -333,7 +332,7 @@ Every commit ends with the trailer as its final line:
   authorization; each message is still recorded and reported at
   the end.
 - Reserved files (=AGENTS.md=, =RULES.org=, =roles.org=,
-  =STARTUP.org=, =opencode.jsonc=, =.opencode/commands/=) need
+  =opencode.jsonc=, =.opencode/commands/=) need
   explicit per-commit go even under a standing authorization.
 
 ** Branch Alignment
