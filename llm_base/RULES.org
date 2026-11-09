@@ -294,9 +294,13 @@ proposed before the change is accepted.
 - No upper bounds: version pins in packaging metadata must not
   cap the top of a range (e.g. =numpy<2=) unless no other option
   can be found
-- Installing the project must never risk downgrading packages
-  already present in the user's environment; a downgrade only
-  when warranted, with the reason stated
+- Accidental package downgrades are forbidden: an install or
+  update must never silently reduce a version already present
+  in the environment; check what an install would change
+  before running it
+- A downgrade happens only when it is explicit and reviewed:
+  a deliberate decision to add the older version to the stack,
+  with the reason stated before the install runs
 
 * Commit Messages
 
@@ -347,3 +351,96 @@ Every commit ends with the trailer as its final line:
   anything.
 - Never rewrite commits already pushed to a shared branch
   without asking.
+
+* File and Directory Placement
+
+Where a file lives is a decision, not a reflex. These rules govern
+new work: what gets created, where it goes, and what is left alone.
+
+** 1. Placement Is a Decision
+
+Before creating a file or directory, find where its kind already
+lives and extend that. A new path is justified only when no
+existing home fits its purpose.
+
+** 2. No Sprawl
+
+- No new top-level directory without asking first.
+- No directory created to hold a single file.
+- No catch-all directories: `junk/`, `old/`, `new/`, `misc/`,
+  `backup/`, `deprecated/`, `temp_*`, `test2`, dated folders.
+- The project root holds project files, session files, config,
+  and deliberate domain directories. It is not a workbench and
+  not a shelf.
+- Scratch work is explicit: a named, ignorable location, cleaned
+  or deliberately left untracked. Never silently committed.
+
+** 3. Derive from Precedent
+
+Existing structure governs. If the project already keeps figures
+in one directory, new figures go there; do not open a parallel
+`figs_v2/` because the name is disliked. Preference never
+overrides precedent.
+
+When no precedent exists, derive the location from need: who
+writes the file, who reads it, how long it lives, whether it can
+be regenerated. Choose the least surprising option and keep it
+consistent afterwards.
+
+** 4. The Repository Is Not the Working Directory
+
+For compute and method development, the repository holds code,
+configuration, small fixtures, and the record of what was run.
+It does not hold the working set.
+
+- Datasets, model checkpoints, embeddings, benchmark outputs,
+  sequencing archives, and large intermediates live in a work
+  area outside the repository.
+- `.gitignore` is a safety net, not a licence. An ignored
+  multi-gigabyte checkpoint is still sprawl in the tree.
+- Results that belong in the project are the small, final
+  artifacts the project actually needs, plus their provenance.
+
+** 5. Work Areas Come from Local Precedent
+
+Where bulk data lives is decided inside each project, never
+prescribed from outside and never invented on the spot.
+
+- Follow the project's existing convention when one exists.
+- Where none exists, and the data_bibliography source project is
+  available, consult it for this machine's data and cluster
+  conventions.
+- Local precedent outranks that source: if the project already
+  answers the question, the project's answer wins.
+- Record the chosen location once, in the project's own files,
+  so the next session does not have to decide again.
+
+** 6. Existing Paths Are Not to Be Moved
+
+These rules govern where new work goes. They are not a mandate
+to reorganize.
+
+- Nothing pre-existing is relocated, renamed, consolidated, or
+  cleaned up until the user requests that specific move as its
+  own task.
+- Agreeing with a rule is not permission to enforce it
+  retroactively. A messy directory that already exists is not
+  evidence of disorder to fix; it is the current convention
+  until the user says otherwise.
+- Harmonization happens over time, inside work that already
+  touches those files. The rule shapes what is added from now
+  on.
+
+** 7. Moves Update All References
+
+A relocation is complete only when nothing points at the old
+path. Update every reference in the same change: configuration,
+documentation, scripts, links, and instruction files.
+
+** 8. Symlinks Are Deliberate Patterns
+
+A symlink is acceptable when it is a documented, repeatable
+structure, such as a shared framework mounted into a project. It
+is not acceptable as a patch over a misplaced copy, a shortcut
+around deciding where something belongs, or a way to reference
+content that should have been copied.
