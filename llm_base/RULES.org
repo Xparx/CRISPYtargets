@@ -115,6 +115,32 @@ Work past the bound runs through one bounded mechanism
 (=xargs -P=, =make -j=, GNU parallel) with its own parallelism
 capped at 10, never one tool call or process per job.
 
+** Do Not Occupy the Prompt
+
+A session holds the prompt for as long as it works, so waiting is
+never free.
+
+- Anything that may run longer than a minute or two (builds, test
+  suites, training, downloads, cluster jobs) runs as a background
+  job and returns control immediately. Report the command, the job
+  handle, and what completion will mean.
+- Foreground is for work expected to finish quickly, or where the
+  next step depends on the result immediately.
+- Never sleep: no =sleep=, no delayed retries, no "wait a moment
+  then check" cycles.
+- Stacked waits cost what one long hold costs. Five short waits
+  are a five-wait total, and the turn and context overhead makes
+  them worse than the equivalent block. Judge the sum, never each
+  wait alone.
+- Never poll a running job. Wait for its completion signal, do
+  independent work, or hand back with the state and what remains.
+- This governs the session's own waiting, not a job's internals: a
+  script that sleeps for a legitimate reason (rate limit, backoff,
+  scheduler queue) is fine, and it belongs in a background job.
+- Do not start a batch of background jobs to route around the
+  bound; that is the substitution section 2 already forbids.
+
+
 * Data Format Rules
 
 These rules govern file formats used when saving tabular data.
