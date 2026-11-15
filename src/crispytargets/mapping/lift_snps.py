@@ -39,16 +39,16 @@ def convert_2bit_to_fa(twobit, fa):
         logging.info("FASTA already exists: %s", fa)
         return
     run(["twoBitToFa", twobit, fa], f"Converting {twobit} → {fa}")
-    run(["samtools", "faidx", fa], f"Indexing {fa}")
+    pysam.faidx(fa)
 
 
 def index_genome(fasta):
-    """Index a FASTA file with samtools if not already indexed."""
+    """Index a FASTA file with pysam if not already indexed."""
     fai = fasta + ".fai"
     if os.path.exists(fai):
         logging.info("Genome already indexed: %s", fai)
         return
-    run(["samtools", "faidx", fasta], f"Indexing {fasta}")
+    pysam.faidx(fasta)
 
 
 def check_vcf_file(vcf_path):
