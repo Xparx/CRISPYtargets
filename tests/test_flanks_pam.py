@@ -151,9 +151,9 @@ def test_strands_score_differently(scored):
     assert score_for(df, "fwd_gene") != pytest.approx(score_for(df, "rev_gene"), abs=1e-9)
 
 
-def test_reverse_flank_starts_after_pam():
+def test_reverse_flank_starts_after_pam(tmp_path):
     """Direct check of the - strand 5' flank offset against the genome."""
-    seq = write_genome(Path("/tmp/opencode/flank_geometry.fa"))
+    seq = write_genome(tmp_path / "flank_geometry.fa")
     start = REV_START
     correct = revcomp(seq[start + 23:start + 28])
     # The pre-fix behaviour read from start+20, i.e. 3 protospacer bases.
