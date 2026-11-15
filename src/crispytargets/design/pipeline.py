@@ -216,12 +216,13 @@ class CrispyPipeline:
         self.gene_map = {}
         gff_df = gr.df
         
-        # Create quick lookup maps for parents and feature types
-        # We use astype(str) to avoid issues with NaN/float types
+        # Create quick lookup maps for parents and feature types.
+        # astype(str) keeps missing values as NA under pandas 3, so test for
+        # them explicitly instead of comparing against a 'nan' string.
         parent_lookup = {}
-        for fid, parent in zip(gff_df['ID'].astype(str), gff_df['Parent'].astype(str)):
-            if parent != 'nan':
-                parent_lookup[fid] = parent.split(',')
+        for fid, parent in zip(gff_df['ID'].astype(str), gff_df['Parent']):
+            if pd.notna(parent):
+                parent_lookup[fid] = str(parent).split(',')
         feature_lookup = dict(zip(gff_df['ID'].astype(str), gff_df['Feature'].astype(str)))
 
         def resolve_to_gene(fid):
