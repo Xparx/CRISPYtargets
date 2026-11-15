@@ -107,6 +107,9 @@ def main():
     mismatches = count_base_mismatches(base, extended)
     primary = primary_set(extended)
     any_kh = any_kh_set(extended)
+    primary_rows = int(extended["KH2013_primary"].notna().sum())
+    any_rows = int((extended["KH2013_primary"].notna()
+                    | extended["KH2013_secondary"].notna()).sum())
     recall_hits, recall_total, precision_hits, precision_total = ghost_agreement(
         extended, ghost)
 
@@ -115,9 +118,12 @@ def main():
         ("rows_extended", len(extended)),
         ("base_columns", len(base.columns)),
         ("base_column_mismatches", mismatches),
-        ("kh2013_primary_nonnull", len(primary)),
-        ("kh2013_any_nonnull", len(any_kh)),
-        ("kh2013_primary_coverage", round(len(primary) / len(extended), 4)),
+        ("kh2013_primary_rows", primary_rows),
+        ("kh2013_primary_row_coverage", round(primary_rows / len(extended), 4)),
+        ("kh2013_any_rows", any_rows),
+        ("kh2013_any_row_coverage", round(any_rows / len(extended), 4)),
+        ("kh2013_distinct_primary", len(primary)),
+        ("kh2013_distinct_any", len(any_kh)),
         ("ghost_pairs", recall_total),
         ("ghost_pairs_matched_primary_or_secondary", recall_hits),
         ("ghost_pair_recall", round(recall_hits / recall_total, 4)),

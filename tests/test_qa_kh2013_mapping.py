@@ -72,8 +72,9 @@ def test_preserved_backbone_passes_and_writes_report(tmp_path, monkeypatch):
     report = pd.read_csv(paths["report"], sep="\t").set_index("metric")["value"]
     assert int(report["rows_extended"]) == 3
     assert int(report["base_column_mismatches"]) == 0
-    assert int(report["kh2013_primary_nonnull"]) == 1
-    assert float(report["kh2013_primary_coverage"]) == pytest.approx(1 / 3, abs=1e-4)
+    assert int(report["kh2013_primary_rows"]) == 1
+    assert float(report["kh2013_primary_row_coverage"]) == pytest.approx(1 / 3, abs=1e-4)
+    assert int(report["kh2013_distinct_primary"]) == 1
     assert float(report["ghost_pair_recall"]) == pytest.approx(0.5, abs=1e-4)
 
     projection = pd.read_csv(paths["projection"], sep="\t")

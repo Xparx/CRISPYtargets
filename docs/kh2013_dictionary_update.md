@@ -1,0 +1,80 @@
+# KH2013 columns for the KY21 dictionary
+
+Run date 2026-11-15. Unity job 1792936, 57 minutes, `cpu` partition.
+Code: `crispytargets` at commit `2ed538a`, env `mycrispytargets`.
+Job script: `tools/kh2013_map.sbatch`. QA gate: `tools/qa_kh2013_mapping.py`.
+
+## What was added
+
+Two columns appended to the existing 11, in this order:
+
+| Column | Meaning |
+|---|---|
+| `KH2013_primary` | Best KH2013 gene ID for the KY21 gene, or empty |
+| `KH2013_secondary` | Other KH2013 genes passing the threshold, pipe-separated, or empty |
+
+Values are gene-level KH IDs (`KH.C1.1`), not isoform IDs. The 11 existing
+columns are unchanged, which the QA gate asserts row by row.
+
+## Files
+
+| File | sha256 |
+|---|---|
+| `KY21_dictionary.extended.tsv` (13 columns, 18,788 rows) | `c2e7513f234e39da6afc3a80d7a9f020b7f27e35fbdf8c109741189f617f81ca` |
+| `KY21_to_KH2013.tsv` (`gene_id`, the two columns) | `92d72abe7e45712e1bd5d5a7a4664bf6e39c84cc9c2d5aedd954f0434fed8218` |
+| `qa_report.tsv` | metrics below |
+
+Cluster: `/work/pi_ybernadskaya_umass_edu/dtjaernberg_umass_edu/projects/crispytargets/results/kh2013_mapping/`
+Bulk (BLAST database and table) and staged inputs:
+`/scratch3/workspace/dtjaernberg_umass_edu-crispytargets/kh2013/`
+
+## Method
+
+Same shape as the KY19, Human and Mouse columns: KY21 proteins are the
+BLAST query, the species proteome is the database.
+
+```
+blastp -query HT.KY21Gene.protein.2.fasta          # 55,505 sequences
+       -db    KH.KHGene.2013.Longest.protein      # 55,017 sequences
+       -outfmt 6 -evalue 1e-5 -max_target_seqs 20
+crispytargets map --species KH2013 --evalue 1e-50 --output <dictionary copy>
+crispytargets clean-mapping -c KH2013_primary,KH2013_secondary
+```
+
+The KH2013 proteome is GHOST's `KH.KHGene.2013.Longest.protein.zip`, the
+same longest-ORF convention as the KY21 file. Its sequences carry `+` as a
+stop marker (1,357 lines), which `makeblastdb` rejects, so the staged copy
+has `+` stripped; nothing else is altered.
+
+## Results
+
+- 14,119 of 18,788 KY21 genes (75.2%) receive a KH2013 primary.
+- 12,805 distinct KH2013 genes appear as a primary; 1,314 KH2013 genes are
+  primary for more than one KY21 gene, which is expected where the older
+  build merged recent duplicates.
+- Against GHOST's own `KHtoKY21.txt.gz` (13,906 pairs, update 2026.11):
+  90.9% of its pairs appear as our primary or secondary, and 89.9% of our
+  primaries agree with GHOST.
+- 4,669 KY21 genes (24.8%) have no KH2013 assignment at this threshold.
+
+## What this means for cionalib
+
+The current `ky21_to_kh2013()` walks KY21 -> KY19 -> KH2013 through
+`feature.KH.KY.anno.tsv` and resolves 14,781 genes (78.7%), slightly more
+than the 75.2% here. The two are different evidence, not a correction of
+one by the other: the annotation chain follows gene-model curation, this
+follows protein similarity. Options:
+
+1. Replace `cionalib/data/KY21_dictionary.tsv` with the extended file and
+   leave `ky21_to_kh2013()` on the two-hop path. Nothing else changes; the
+   new columns become available for direct joins.
+2. Switch `ky21_to_kh2013()` to read `KH2013_primary`. This changes
+   coverage from 78.7% to 75.2% and makes `annotate_ghost_ids()`
+   inconsistent with it, because that function still maps through
+   `feature.KH.KY.anno.tsv`; the test `annotate_ghost_ids() disagrees with
+   ky21_to_kh2013()` will fail unless both paths move together.
+3. Keep both: rename the existing function to `ky21_to_kh2013_curated()`
+   and add `ky21_to_kh2013_blast()`, so callers choose the evidence.
+
+Option 3 is the honest one if downstream analyses depend on the current
+coverage; option 1 is the smallest change.
