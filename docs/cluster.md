@@ -40,6 +40,10 @@ came from, so a run stays traceable after the workspace expires.
 
 ## Jobs
 
+- Before submitting, run the suite: `python -m pytest tests/` locally and,
+  after the clone is pulled on the cluster, the same suite in
+  `mycrispytargets`. Java and minimap2 tests skip there unless those tools
+  are on PATH.
 - Submit with `sbatch --parsable` from the directory the script assumes;
   the script cd's to absolute paths anyway, so the submit cwd does not
   matter.
