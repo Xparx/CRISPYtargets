@@ -95,3 +95,26 @@ def parse_flashfry_contig(contig_str):
         return None, None, None, None, None, None
 
 
+def assign_feature_index(df):
+    """Add ``feature_index``: the 1-based ordinal of each target region
+    within its (gene_id, feature) group, in transcription order (5' to 3'):
+    ascending Start on the + strand, descending on the - strand.
+
+    Regions are the distinct spans parsed from the FlashFry contig
+    headers, so every guide inside one block shares the same index.
+    Promoters number separately from CDS/exon blocks. Numbering is per
+    gene, not per transcript: blocks of several isoforms of one gene are
+    pooled and ordered by coordinate.
+    """
+    key = ['gene_id', 'feature', 'Chromosome', 'Start', 'End', 'Strand']
+    regions = df[key].drop_duplicates()
+    regions = regions.sort_values(['gene_id', 'feature', 'Start', 'End'])
+    group = ['gene_id', 'feature']
+    asc = regions.groupby(group).cumcount()
+    total = regions.groupby(group)['Start'].transform('size')
+    regions['feature_index'] = asc + 1
+    minus = regions['Strand'].eq('-')
+    regions.loc[minus, 'feature_index'] = total[minus] - asc[minus]
+    return df.merge(regions[key + ['feature_index']], on=key, how='left')
+
+

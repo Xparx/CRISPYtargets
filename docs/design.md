@@ -178,12 +178,12 @@ Columns are grouped so related scores sit next to each other, in this order:
 
 | # | Column(s) | Description |
 |---|-----------|-------------|
-| 1-3 | `gene_id`, `feature`, `over_cutoff` | Identity: resolved root gene ID, feature type (exon, CDS, promoter), passes the Doench cutoff |
-| 4-10 | `Chromosome`, `Start`, `End`, `Strand`, `start`, `stop`, `contig` | Coordinates: gene location plus the guide's position within it |
-| 11-15 | `Doench2016OnTarget`, `RuleSet3`, `Hsu2013`, `otCount`, `accessibility` | Reference scores: our on-target scores (RS2, RS3), the default off-target metrics from FlashFry, and open-chromatin overlap |
-| 16-21 | `target`, `context`, `orientation`, `overflow`, `fwd`, `rev` | Guide sequence: 23bp guide + PAM, flanking context, strand, and the designed oligos |
-| 22-26 | `num_snps`, `snp_overlaps`, `entropy`, `snp_pam_dist`, `snp_cut_dist` | SNP annotation, grouped with the variant scores below because both are absent when no SNP data is given |
-| 27-38 | `Doench2016OnTarget_avg1snp` / `_worst1snp` / `_allsnps` + `Doench2016_delta_avg` / `_worst` / `_all`, then the same six for `RuleSet3` | Variant scores (only with `--rescore-snps`, RS3 columns need `--rs3`): raw variant scores plus deltas versus the reference score (variant minus reference; positive = improvement) |
+| 1-4 | `gene_id`, `feature`, `feature_index`, `over_cutoff` | Identity: resolved root gene ID, feature type (exon, CDS, promoter), block number within the gene in transcription order (1 = 5' end; promoters number separately), passes the Doench cutoff |
+| 5-11 | `Chromosome`, `Start`, `End`, `Strand`, `start`, `stop`, `contig` | Coordinates: gene location plus the guide's position within it |
+| 12-16 | `Doench2016OnTarget`, `RuleSet3`, `Hsu2013`, `otCount`, `accessibility` | Reference scores: our on-target scores (RS2, RS3), the default off-target metrics from FlashFry, and open-chromatin overlap |
+| 17-22 | `target`, `context`, `orientation`, `overflow`, `fwd`, `rev` | Guide sequence: 23bp guide + PAM, flanking context, strand, and the designed oligos |
+| 23-27 | `num_snps`, `snp_overlaps`, `entropy`, `snp_pam_dist`, `snp_cut_dist` | SNP annotation, grouped with the variant scores below because both are absent when no SNP data is given |
+| 28-39 | `Doench2016OnTarget_avg1snp` / `_worst1snp` / `_allsnps` + `Doench2016_delta_avg` / `_worst` / `_all`, then the same six for `RuleSet3` | Variant scores (only with `--rescore-snps`, RS3 columns need `--rs3`): raw variant scores plus deltas versus the reference score (variant minus reference; positive = improvement) |
 | trailing | any further `--metrics` column, e.g. `Doench2014OnTarget` | FlashFry on-target scores, written last as pass-through whenever requested via `--metrics` |
 
 Notes on individual columns:

@@ -7,7 +7,7 @@ description: sgRNA design and scoring runs — prepare targets, run the crispy p
 
 ## Roles
 
-Full role definitions in `roles.org`. Read them if not already
+Full role definitions in `llm_base/roles.org`. Read them if not already
 in context. The active roles for this workflow are:
 
 - Expert Bioinformatics Researcher

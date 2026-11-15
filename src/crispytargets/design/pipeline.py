@@ -12,7 +12,7 @@ from ..common.config import load_config
 from ..common.exec import run_command
 from ..common.logging import setup_logging
 from .utils import calculate_entropy, design_oligos, parse_flashfry_contig
-from .utils import complement_iupac, snp_to_iupac
+from .utils import assign_feature_index, complement_iupac, snp_to_iupac
 from .doench2016 import score_guides
 import gc
 
@@ -267,6 +267,9 @@ class CrispyPipeline:
         parsed_coords = df['contig'].apply(parse_flashfry_contig)
         # Unpack 6 values: gene_id, feature, Chromosome, Start, End, Strand
         df[['gene_id', 'feature', 'Chromosome', 'Start', 'End', 'Strand']] = pd.DataFrame(parsed_coords.tolist(), index=df.index)
+        # Block ordinal within the gene (transcription order), so guides can be
+        # sorted first-to-last along the gene: feature_index 1 is the 5' end.
+        df = assign_feature_index(df)
         # Start/End are the target REGION's span and Strand the region's strand,
         # but every downstream overlap must use the GUIDE's own window and strand.
         # extract_sequences writes genome[Start:End] forward for both strands, and
@@ -631,7 +634,7 @@ class CrispyPipeline:
         # otCount) live in the reference block; any further FlashFry metric the
         # user requested through --metrics trails at the end, as pure pass-through.
         _own_order = [
-            'gene_id', 'feature', 'over_cutoff',
+            'gene_id', 'feature', 'feature_index', 'over_cutoff',
             'Chromosome', 'Start', 'End', 'Strand', 'start', 'stop', 'contig',
             'Doench2016OnTarget', 'RuleSet3', 'Hsu2013', 'otCount', 'accessibility',
             'target', 'context', 'orientation', 'overflow', 'fwd', 'rev',
