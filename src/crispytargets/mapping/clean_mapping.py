@@ -28,6 +28,19 @@ def clean_locus_id(id_str):
     
     return "|".join(unique_cleaned)
 
+def drop_primary(secondary, primary):
+    """Remove the primary value from a pipe-separated secondary cell.
+
+    Collapsing isoform IDs to locus IDs can turn a list of alternative
+    isoforms into the primary locus itself, so the secondary column would
+    repeat the primary. Returns an empty string when nothing else remains.
+    """
+    if pd.isna(secondary) or pd.isna(primary):
+        return secondary
+    keep = [x for x in str(secondary).split('|') if x and x != primary]
+    return "|".join(keep)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Clean Ciona isoform IDs in a mapping file.")
     parser.add_argument("-i", "--input", required=True, help="Path to the input mapping TSV file")
@@ -48,6 +61,13 @@ def main():
                 df[col] = df[col].apply(clean_locus_id)
             else:
                 print(f"Warning: Column '{col}' not found in file. Skipping.")
+
+        for col in cols_to_clean:
+            if col.endswith('_secondary') and col in df.columns:
+                primary_col = col[:-len('_secondary')] + '_primary'
+                if primary_col in df.columns:
+                    df[col] = [drop_primary(s, p) for s, p in
+                               zip(df[col], df[primary_col])]
 
         # Save the cleaned mapping
         df.to_csv(args.output, sep=args.sep, index=False)

@@ -128,6 +128,8 @@ def create_mapping(gff3_path, blast_path, species_label, output_path, evalue_thr
             others = group['sseqid'].unique()
             others = [s.split('|')[-1] if isinstance(s, str) else s for s in others]
             others = [o for o in others if o != top_hit]
+            # Distinct subject IDs can strip to the same accession.
+            others = list(dict.fromkeys(others))
 
             row = {
                 'gene_id': gene_id,

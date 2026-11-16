@@ -444,6 +444,11 @@ species proteome `species.faa`.
    crispytargets clean-mapping -i orthologs.tsv -o orthologs.tsv -c "<col>,<col2>"
    ```
 
+   When a `<prefix>_secondary` column is cleaned next to its
+   `<prefix>_primary`, the primary is dropped from the secondary, because
+   collapsing isoforms to loci can otherwise turn a list of alternatives
+   into the primary locus itself.
+
 ### Worked example: Ciona robusta (this project's data)
 
 Source = the **KY21** assembly (the gold-standard build). KY19 and KH2013 are

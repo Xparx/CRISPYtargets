@@ -20,8 +20,8 @@ columns are unchanged, which the QA gate asserts row by row.
 
 | File | sha256 |
 |---|---|
-| `KY21_dictionary.extended.tsv` (13 columns, 18,788 rows) | `c2e7513f234e39da6afc3a80d7a9f020b7f27e35fbdf8c109741189f617f81ca` |
-| `KY21_to_KH2013.tsv` (`gene_id`, the two columns) | `92d72abe7e45712e1bd5d5a7a4664bf6e39c84cc9c2d5aedd954f0434fed8218` |
+| `KY21_dictionary.extended.tsv` (13 columns, 18,788 rows) | `aa05c786e9fe7d163f0885e374a153f009d98f3417825f7afac093283296b3a2` |
+| `KY21_to_KH2013.tsv` (`gene_id`, the two columns) | `b5684115bea2ed05b6c827d97a69abb4162b4061e955b8bc1c79999eb48cb820` |
 | `qa_report.tsv` | metrics below |
 
 Cluster: `/work/pi_ybernadskaya_umass_edu/dtjaernberg_umass_edu/projects/crispytargets/results/kh2013_mapping/`
@@ -52,10 +52,20 @@ has `+` stripped; nothing else is altered.
 - 12,805 distinct KH2013 genes appear as a primary; 1,314 KH2013 genes are
   primary for more than one KY21 gene, which is expected where the older
   build merged recent duplicates.
+- 4,948 assigned rows carry a genuine alternative gene in
+  `KH2013_secondary`; 9,171 have no other gene passing the threshold.
 - Against GHOST's own `KHtoKY21.txt.gz` (13,906 pairs, update 2026.11):
   90.9% of its pairs appear as our primary or secondary, and 89.9% of our
   primaries agree with GHOST.
 - 4,669 KY21 genes (24.8%) have no KH2013 assignment at this threshold.
+
+Secondary hits are gene-level and never repeat the primary. Two causes
+were fixed before these files were finalised: the mapper could list the
+same accession twice under different subject formats (`sp|P1|GENE` and
+`tr|P1|GENE`), and collapsing isoform IDs to locus IDs could turn a list of
+alternative isoforms into the primary locus itself. The mapper now
+deduplicates stripped accessions, and `clean-mapping` drops the primary
+from the secondary column.
 
 ## What this means for cionalib
 
