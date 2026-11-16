@@ -42,8 +42,9 @@ came from, so a run stays traceable after the workspace expires.
 
 - Before submitting, run the suite: `python -m pytest tests/` locally and,
   after the clone is pulled on the cluster, the same suite in
-  `mycrispytargets`. Java and minimap2 tests skip there unless those tools
-  are on PATH.
+  `mycrispytargets` (command under Environment below). With the env built
+  as described it runs complete; anything skipping there means a tool is
+  missing, not that the test is optional.
 - Submit with `sbatch --parsable` from the directory the script assumes;
   the script cd's to absolute paths anyway, so the submit cwd does not
   matter.
@@ -56,6 +57,32 @@ came from, so a run stays traceable after the workspace expires.
   `module load conda/latest`, then `conda activate mycrispytargets`.
 - Wall time is fixed at submit and cannot be raised; the `cpu` partition
   allows 14 days.
+
+## Environment
+
+`mycrispytargets` lives in `/work/.../.conda/envs/`. The package is
+installed editable from the clone, so `git pull` in
+`~/projects/src/crispytargets` updates the code without reinstalling.
+
+```
+module load conda/latest
+conda create -y -n mycrispytargets python=3.12
+conda activate mycrispytargets
+pip install --no-cache-dir -e ~/projects/src/crispytargets
+pip install --no-cache-dir lightgbm sglearn pytest
+conda install -y -c conda-forge -c bioconda openjdk minimap2 tabix
+```
+
+`tools/env_update.sbatch` runs the tool install as a job and prints the
+package diff, so a change to an existing package is visible.
+
+Suite on the cluster:
+
+```
+module load conda/latest
+conda run --no-capture-output -n mycrispytargets python -m pytest \
+    ~/projects/src/crispytargets/tests -q
+```
 
 ## Inputs
 
