@@ -60,8 +60,46 @@
 
    Test suite: 38 tests, =python -m pytest tests/=.
 
+** DONE Cluster environment and the KH2013 dictionary columns
+   Completed 2026-11-16.
+   - Repo on Unity: GitHub is the intermediary, clone at
+     =~/projects/src/crispytargets=, env =mycrispytargets= in
+     =/work/.../.conda/envs/= (java, minimap2, tabix; FlashFry JAR copied
+     in). Cluster suite runs complete: 60 passed, 0 skipped.
+   - Conventions recorded in =docs/cluster.md=: project layout under
+     =/work/.../projects/crispytargets/=, bulk (downloads, BLAST databases,
+     BLAST tables) in the =crispytargets= scratch workspace, never in
+     =/work=, workspace resolved from =ws_list= at run time.
+   - =tools/kh2013_map.sbatch= (job 1792936, 57 min) added
+     =KH2013_primary= / =KH2013_secondary= to the dictionary: 14,119 of
+     18,788 rows assigned (75.2%), 90.9% recall and 89.9% precision against
+     GHOST's own =KHtoKY21= pairs. Artifacts and checksums in
+     =docs/kh2013_dictionary_update.md=; handover bundle under
+     =output/kh2013_mapping/handoff/=.
+   - =tools/qa_kh2013_mapping.py= gates the run on an unchanged backbone
+     and reports coverage and agreement; covered by tests.
+   - Bugs fixed along the way: pandas 3 keeps missing values as NA so the
+     GFF parent lookup crashed; a test wrote its fixture to a hardcoded
+     =/tmp/opencode= path; the lift path shelled out to =samtools= instead
+     of =pysam.faidx=; the mapper and =clean-mapping= could repeat the
+     primary in the secondary column.
+   - KH2012 evaluated and rejected: its proteins are a strict subset of
+     KH2013 (identical sequences, same namespace), so no column is built.
+
 * Backlog
-- [ ] Decide tracking policy for =data/= and =output/= (presently untracked but not ignored)
+- [X] Decide tracking policy for =data/= and =output/= — both are ignored
+      in =.gitignore=.
+- [ ] Adopt the KH2013 columns in =cionalib= (user's call). Choose one
+      source of truth: the new column (75.2%) or the curated
+      KY21 -> KY19 -> KH2013 chain (78.7%); mixing them silently makes
+      results depend on the code path.
+- [ ] Cluster rollout for lab members, paused 2026-11-15 before execution:
+      one-command wrapper (gene list in, sbatch out) plus a starter
+      notebook that submits, polls and downloads results. Open decisions:
+      kernel registration (home spec vs =JUPYTER_PATH= vs PATH cell), env
+      scope, and approval for the read-only recon.
+- [ ] Optional: numeric legacy IDs (=KH.100170058=) to KY21, a join through
+      KY19 rather than a new BLAST, only if a consumer needs that scheme.
 - [ ] Re-run Ghost_SNPs liftover with the fixed CIGAR-aware mapper; previous
       lifted coordinates were wrong for ~80% of variants (see the test-suite
       bug notes above). Cached alignment at =/tmp/opencode/quantify/=.

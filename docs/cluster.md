@@ -64,6 +64,16 @@ scp'd, because GHOST refuses compute-node egress. Each staged bundle
 carries `PROVENANCE.txt` and `PROVENANCE.sha256`; the job verifies the
 checksums before doing any work.
 
+The FlashFry JAR is not in git. After cloning into `~/projects/src/`, copy
+it in so the design tests run instead of skipping:
+
+```
+scp tools/FlashFry-assembly-1.15.jar unity:projects/src/crispytargets/tools/
+```
+
+With java, minimap2, tabix and the JAR present, the cluster suite runs
+complete: 60 passed, 0 skipped (2026-11-16).
+
 ## Known input quirks
 
 GHOST's KH2013 longest-ORF protein FASTA (`KH.KHGene.2013.Longest.protein.fasta`)

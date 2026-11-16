@@ -149,6 +149,11 @@ crispytargets design \
 - [docs/mapping.md](docs/mapping.md) — BLAST ortholog mapping and its
   incremental backbone, SNP liftover internals, preset selection, SNP source
   and preprocessing for *Ciona robusta*
+- [docs/cluster.md](docs/cluster.md) — running the package on the Unity
+  cluster: layout, the scratch rule, the workspace, and the job pattern
+- [docs/kh2013_dictionary_update.md](docs/kh2013_dictionary_update.md) —
+  the KH2013 columns added to the KY21 dictionary: method, checksums,
+  quality figures, and how to read them
 
 ## Testing
 

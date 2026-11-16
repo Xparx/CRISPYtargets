@@ -94,3 +94,7 @@ Thumbs.db
 deprecated
 /data/
 /output/
+
+# Deck working copy; the canonical deck lives in the sibling
+# reveal-stress-test project and the framework is mounted by symlink.
+/slides/
