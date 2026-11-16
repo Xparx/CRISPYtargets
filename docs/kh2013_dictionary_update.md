@@ -67,6 +67,31 @@ alternative isoforms into the primary locus itself. The mapper now
 deduplicates stripped accessions, and `clean-mapping` drops the primary
 from the secondary column.
 
+## Why there is no KH2012 column
+
+GHOST also serves the 2012 release, and it was evaluated and rejected: its
+longest-ORF protein set is a strict subset of 2013's.
+
+- 2012 has 54,733 sequences; every ID also exists in 2013 and the shared
+  sequences are byte-identical. 2013 adds 284 sequences.
+- At gene level 15,285 IDs are shared, 4 genes exist only in 2013 and none
+  only in 2012. Both releases use the same `KH.C1.1` namespace.
+- Measured against this run's BLAST table, the 284 missing proteins appear
+  in 4,275 hit rows and were the top hit for 223 KY21 isoforms, which
+  belong to 13 of the 18,788 genes. Fourteen of those queries keep the same
+  KH gene through the next-best hit, 184 lose their hit entirely, and 25
+  switch gene.
+
+A KH2012 column would therefore differ from `KH2013_primary` on roughly 13
+rows, under the same identifiers, so it is not built. The consequence for
+consumers: a KH2012 gene ID can be answered from the KH2013 column, since
+the namespaces coincide.
+
+The numeric identifiers in older tabulations (`KH.100170058` and similar,
+as in `ciona/data/genomic_resources/KH2012_KY2019.tsv`) are a different
+scheme, not the `KH.C` gene names. Mapping those to KY21 is a join through
+KY19 (`KY19_primary`), not a new BLAST.
+
 ## What this means for cionalib
 
 The current `ky21_to_kh2013()` walks KY21 -> KY19 -> KH2013 through
