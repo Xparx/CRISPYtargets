@@ -470,3 +470,26 @@ structure, such as a shared framework mounted into a project. It
 is not acceptable as a patch over a misplaced copy, a shortcut
 around deciding where something belongs, or a way to reference
 content that should have been copied.
+
+* Conda Environments
+
+The base conda environment is shared infrastructure: breaking it
+breaks every environment and every project that depends on it.
+
+- Never install, upgrade, or remove a package in base without an
+  explicit hard yes from the user for that specific action. A
+  general "go ahead" elsewhere in the session is not that yes.
+- At the start of a session that will run Python or install
+  anything, determine which environment is active (=echo
+  "$CONDA_DEFAULT_ENV"=, =which python=) and state it, so the
+  user can redirect before work happens.
+- If the session is running in base, say so and stop before
+  installing or changing packages. Do not create, clone, or
+  switch environments on your own initiative; propose the
+  target environment and let the user choose.
+- Name the target environment in every install request
+  ("installs into =env_name="), never just the package.
+- The check happens once at session start and does not need
+  repeating, unless something changes: a new environment is
+  activated, a job runs under a different interpreter, or a
+  command fails in a way that points at the wrong environment.
