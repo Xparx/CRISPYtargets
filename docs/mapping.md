@@ -120,6 +120,11 @@ crispytargets map \
 ```
 *This loads the existing `orthologs.tsv` and appends `Mouse_primary` and `Mouse_secondary` columns.*
 
+If the species proteome names BLAST subjects by protein or transcript rather
+than by gene, add `--subject-map protein_to_gene.tsv`. Ensembl is the worked
+example: its FASTA identifiers are `ENSCINP…` peptides while the mapping is
+wanted at `ENSCING…` genes, and the header text `gene:` supplies the map.
+
 #### Step 3: Using a Configuration File
 Create a `mapping_config.yaml`:
 ```yaml
@@ -139,6 +144,7 @@ crispytargets map --config mapping_config.yaml --blast-file zfish.tsv --species 
 | `--config` | No | Path to a YAML configuration file. |
 | `--gff` | **Yes** | Path to the source organism's GFF3 file. |
 | `--blast-file` | **Yes** | Path to the BLAST results TSV for the species. |
+| `--subject-map` | No | TSV with `protein_id` and `gene_id` columns, for proteomes whose BLAST subjects are transcript or protein accessions (for example Ensembl `ENSCINP` to `ENSCING`). Collapses hits to genes before primary and secondary are chosen. |
 | `--species` | **Yes** | Label for the species (e.g., 'Human', 'Mouse'). |
 | `--output` | **Yes** | Path to the output TSV (will be updated incrementally). |
 | `--evalue` | No | E-value threshold for significance (Default: `1e-50`). |

@@ -88,13 +88,35 @@
    - KH2012 evaluated and rejected: its proteins are a strict subset of
      KH2013 (identical sequences, same namespace), so no column is built.
 
+** DONE Ensembl columns on the KY21 dictionary
+   Completed 2026-11-24.
+   - Tested the no-BLAST route first. Ensembl release 116 serves the same KH
+     assembly but a separate genebuild: 16,671 genes against 15,288, only
+     2.2% of its peptides identical to a KH2013 protein, and no KH or KY
+     identifiers in the GFF3, GTF or FASTA headers. A coordinate chain
+     reached 5,923 of 18,788 genes (31.5%) and disagreed with the existing
+     bridge on half of what it did map, so a direct BLAST was the only sound
+     path.
+   - =tools/map_species.sbatch= and =tools/qa_species_mapping.py= were
+     generalized from the KH2013 versions; the mapper gained
+     =--subject-map= (Ensembl ENSCINP to ENSCING from the FASTA headers),
+     covered by tests. Suite: 63 passed locally and on the cluster.
+   - Job 2233878, 15 min: 12,378 rows (65.9%) get an Ensembl primary over
+     11,145 distinct genes, 1,743 more rows than the legacy KY19-chained
+     bridge; 90.8% of the bridge's pairs are recovered and 80.1% of
+     primaries agree where both map.
+   - Artifacts in =output/ensembl_mapping/=; method and caveats in
+     =docs/ensembl_dictionary_update.md=; provenance row in
+     =docs/provenance.md=.
+
 * Backlog
 - [X] Decide tracking policy for =data/= and =output/= — both are ignored
       in =.gitignore=.
-- [ ] Adopt the KH2013 columns in =cionalib= (user's call). Choose one
-      source of truth: the new column (75.2%) or the curated
-      KY21 -> KY19 -> KH2013 chain (78.7%); mixing them silently makes
-      results depend on the code path.
+- [ ] Adopt the KH2013 and Ensembl columns in =cionalib= (user's call).
+      For KH2013 choose one source of truth: the new column (75.2%) or the
+      curated KY21 -> KY19 -> KH2013 chain (78.7%); mixing them silently
+      makes results depend on the code path. For Ensembl the direct column
+      (65.9%) supersedes the KY19-chained bridge (56.6%).
 - [ ] Cluster rollout for lab members, paused 2026-11-15 before execution:
       one-command wrapper (gene list in, sbatch out) plus a starter
       notebook that submits, polls and downloads results. Open decisions:

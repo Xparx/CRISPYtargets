@@ -154,6 +154,9 @@ crispytargets design \
 - [docs/kh2013_dictionary_update.md](docs/kh2013_dictionary_update.md) —
   the KH2013 columns added to the KY21 dictionary: method, checksums,
   quality figures, and how to read them
+- [docs/ensembl_dictionary_update.md](docs/ensembl_dictionary_update.md) —
+  the Ensembl columns, why they needed a BLAST rather than a join, and the
+  same quality and caveat figures
 
 ## Testing
 
