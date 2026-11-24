@@ -21,6 +21,10 @@ def main():
     parser.add_argument("--output", default=config.get('output'), required=not config.get('output'), help="Output TSV path (will be updated incrementally)")
     parser.add_argument("--evalue", type=float, default=config.get('evalue', 1e-50), help="E-value threshold (default: 1e-50)")
     parser.add_argument("--include-top", action="store_true", default=config.get('include_top', False), help="Include the top hit if no hits meet the evalue threshold")
+    parser.add_argument("--subject-map", type=str, default=config.get('subject_map'),
+                        help="Optional TSV with protein_id and gene_id columns, for proteomes "
+                             "whose BLAST subjects are transcript or protein accessions "
+                             "(for example Ensembl ENSCINP to ENSCING).")
     parser.add_argument("--proteome", type=str, default=config.get('proteome'),
                         help="Optional UniProt proteome FASTA for the species. When given, adds "
                              "{species}_symbol (gene symbol from the GN= field, MGI for mouse / "
@@ -37,7 +41,8 @@ def main():
         output_path=args.output,
         evalue_threshold=args.evalue,
         include_top=args.include_top,
-        proteome_path=args.proteome
+        proteome_path=args.proteome,
+        subject_map_path=args.subject_map
     )
     logging.info("Done.")
 

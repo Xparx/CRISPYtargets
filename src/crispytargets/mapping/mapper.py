@@ -84,9 +84,24 @@ class GFF3Resolver:
                     
         return fid # Fallback to original ID if no gene ancestor is found
 
+def load_subject_map(path):
+    """Read a TSV of BLAST subject accessions to gene identifiers.
+
+    Some proteomes name sequences by transcript or protein accession while
+    the mapping is wanted at gene level (Ensembl ``ENSCINP`` to ``ENSCING``).
+    The file must have ``protein_id`` and ``gene_id`` columns.
+    """
+    table = pd.read_csv(path, sep='\t')
+    missing = {'protein_id', 'gene_id'} - set(table.columns)
+    if missing:
+        raise ValueError(f"subject map {path} lacks columns: {sorted(missing)}")
+    return dict(zip(table['protein_id'], table['gene_id']))
+
+
 def create_mapping(gff3_path, blast_path, species_label, output_path, evalue_threshold=1e-50,
-                   include_top=False, proteome_path=None):
+                   include_top=False, proteome_path=None, subject_map_path=None):
     resolver = GFF3Resolver(gff3_path)
+    subject_map = load_subject_map(subject_map_path) if subject_map_path else {}
     entry2sym = load_proteome_symbols(proteome_path) if proteome_path else {}
     cols = ['qseqid', 'sseqid', 'pident', 'length', 'mismatch', 'gapopen',
             'qstart', 'qend', 'sstart', 'send', 'evalue', 'bitscore']
@@ -99,6 +114,10 @@ def create_mapping(gff3_path, blast_path, species_label, output_path, evalue_thr
         except FileNotFoundError:
             logging.exception(f"File {path} not found.")
             return pd.DataFrame()
+
+        # 0. Collapse subject accessions to gene identifiers when a map is given
+        if subject_map:
+            df['sseqid'] = df['sseqid'].map(lambda s: subject_map.get(s, s))
 
         # 1. Resolve all hits to the root gene_id
         df['gene_id'] = df['qseqid'].apply(resolver.resolve_to_gene)

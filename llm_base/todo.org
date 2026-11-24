@@ -70,13 +70,15 @@
      =/work/.../projects/crispytargets/=, bulk (downloads, BLAST databases,
      BLAST tables) in the =crispytargets= scratch workspace, never in
      =/work=, workspace resolved from =ws_list= at run time.
-   - =tools/kh2013_map.sbatch= (job 1792936, 57 min) added
+   - =tools/map_species.sbatch= (then named =kh2013_map.sbatch=; job
+     1792936, 57 min) added
      =KH2013_primary= / =KH2013_secondary= to the dictionary: 14,119 of
      18,788 rows assigned (75.2%), 90.9% recall and 89.9% precision against
      GHOST's own =KHtoKY21= pairs. Artifacts and checksums in
      =docs/kh2013_dictionary_update.md=; handover bundle under
      =output/kh2013_mapping/handoff/=.
-   - =tools/qa_kh2013_mapping.py= gates the run on an unchanged backbone
+   - =tools/qa_species_mapping.py= (then =qa_kh2013_mapping.py=) gates the
+     run on an unchanged backbone
      and reports coverage and agreement; covered by tests.
    - Bugs fixed along the way: pandas 3 keeps missing values as NA so the
      GFF parent lookup crashed; a test wrote its fixture to a hardcoded

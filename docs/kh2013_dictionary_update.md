@@ -6,7 +6,10 @@ consumer.
 
 - Produced 2026-11-15, Unity job 1792936, 57 minutes.
 - Code: `crispytargets` commit `2ed538a`, conda env `mycrispytargets`.
-- Job script: `tools/kh2013_map.sbatch`; QA gate: `tools/qa_kh2013_mapping.py`.
+- Job script and QA gate: `tools/map_species.sbatch` and
+  `tools/qa_species_mapping.py` (named `kh2013_map.sbatch` and
+  `qa_kh2013_mapping.py` when this run was made; the KH2013 defaults
+  reproduce it).
 
 ## The data
 
