@@ -107,11 +107,12 @@ still not a rename of the KH gene models.
 
 - The table is keyed on KY21 genes. The reverse direction is one-to-many.
 - The KH2013 and Ensembl columns are independent protein-similarity maps,
-  so where both carry a gene they need not name the same locus: 94.1% of
-  such pairs sit on the same chromosome or scaffold and 72.2% within 10 kb,
-  but the two builds resolve tandem families differently and KY21 carries
-  more copies in several of them. Neither column is ground truth, and the
-  secondary column is informational.
+  so where both carry a gene they need not name the same locus. Of the
+  10,140 such pairs whose Ensembl gene sits on a scaffold shared with the
+  KH2013 file, 94.1% are on the same chromosome or scaffold and 72.2% lie
+  within 10 kb; the two builds resolve tandem families differently and KY21
+  carries more copies in several of them. Neither column is ground truth,
+  and the secondary column is informational.
 - `ENSEMBL_secondary` lists genes, not peptides, and is not a confidence
   measure.
 
