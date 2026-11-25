@@ -116,6 +116,23 @@ still not a rename of the KH gene models.
 - `ENSEMBL_secondary` lists genes, not peptides, and is not a confidence
   measure.
 
+## Verification
+
+Checked 2026-11-24, after the run:
+
+- The QA gate reports 18,788 rows before and after and zero mismatches
+  across the 13 pre-existing columns, so the two Ensembl columns are the
+  only change.
+- Columns 1-13 of the extended dictionary hash to `aa05c786…`, the same
+  value as the dictionary the run started from.
+- The local copies in `output/ensembl_mapping/` and the cluster copies in
+  `/work/.../results/ensembl_mapping/` hash to the values in the table
+  above.
+- `sha256sum -c CHECKSUMS.sha256` passes in
+  `output/ensembl_mapping/handoff/`.
+- The 63 tests pass locally and on the cluster at commit `fa4194b`, the
+  commit the run used; only documentation changed afterwards.
+
 ## Handover bundle
 
 The three files in the table above, plus this document. A TSV join on

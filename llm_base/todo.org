@@ -108,14 +108,22 @@
    - Artifacts in =output/ensembl_mapping/=; method and caveats in
      =docs/ensembl_dictionary_update.md=; provenance row in
      =docs/provenance.md=.
+   - Sign-off 2026-11-24: local and cluster copies hash to the recorded
+     values, the handoff checksums verify, the 13-column prefix is
+     byte-identical to the previous dictionary, and 63 tests pass locally
+     and on the cluster at the run's commit. The dictionary at
+     =cionalib/cionalib/data/KY21_dictionary.tsv= now carries the 15
+     columns (sha =e477bb5e=), uncommitted in that repo's working tree.
 
 * Backlog
 - [X] Decide tracking policy for =data/= and =output/= — both are ignored
       in =.gitignore=.
-- [ ] Adopt the KH2013 and Ensembl columns in =cionalib= (user's call).
-      For KH2013 choose one source of truth: the new column (75.2%) or the
-      curated KY21 -> KY19 -> KH2013 chain (78.7%); mixing them silently
-      makes results depend on the code path. For Ensembl the direct column
+- [ ] =cionalib= adoption: the dictionary file now has both species (15
+      columns), uncommitted in that repo. Its functions, tests and commit
+      are the remaining part. For KH2013 one source of truth still has to
+      be chosen: the included column (75.2%) or the curated
+      KY21 -> KY19 -> KH2013 chain (78.7%); mixing them silently makes
+      results depend on the code path. For Ensembl the direct column
       (65.9%) supersedes the KY19-chained bridge (56.6%).
 - [ ] Cluster rollout for lab members, paused 2026-11-15 before execution:
       one-command wrapper (gene list in, sbatch out) plus a starter
