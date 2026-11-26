@@ -46,9 +46,9 @@ Verify with `sha256sum <file>`; the values above are the contract.
 Copies: `output/kh2013_mapping/` in the CRISPYtargets working tree (that
 directory is not tracked by git), and on Unity under
 `/work/pi_ybernadskaya_umass_edu/dtjaernberg_umass_edu/projects/crispytargets/results/kh2013_mapping/`.
-Staged inputs and the regenerable BLAST artefacts live in the project
-scratch workspace, not in those directories, and carry no guarantee beyond
-the workspace expiry.
+Staged inputs and the regenerable BLAST artefacts lived in the
+project scratch workspace during the run, not in those directories;
+the workspace was released on 2026-11-26.
 
 ## How it was produced
 

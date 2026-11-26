@@ -114,6 +114,11 @@
      and on the cluster at the run's commit. The dictionary at
      =cionalib/cionalib/data/KY21_dictionary.tsv= now carries the 15
      columns (sha =e477bb5e=), uncommitted in that repo's working tree.
+   - Scratch released 2026-11-26: the crispytargets workspace held only
+     staged inputs and the regenerable BLAST artefacts of the KH2013 and
+     Ensembl runs. All six =/work= results were re-hashed against the
+     recorded values first; the =SCRATCH_BUNDLE.txt= pointers in both result
+     directories record the release.
 
 * Backlog
 - [X] Decide tracking policy for =data/= and =output/= — both are ignored
